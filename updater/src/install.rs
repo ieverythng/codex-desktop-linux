@@ -1,3 +1,5 @@
+//! Installation helpers for privileged and non-privileged package application.
+
 use anyhow::{Context, Result};
 use std::{
     path::{Path, PathBuf},
@@ -36,6 +38,7 @@ impl PackageKind {
     }
 }
 
+/// Returns the currently installed package version when available.
 pub fn installed_package_version() -> String {
     match PackageKind::detect() {
         PackageKind::Deb => installed_deb_version(),
@@ -44,41 +47,23 @@ pub fn installed_package_version() -> String {
 }
 
 fn installed_deb_version() -> String {
-    match Command::new("dpkg-query")
-        .args(["-W", "-f=${Version}", PACKAGE_NAME])
-        .output()
-    {
-        Ok(output) if output.status.success() => {
-            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if version.is_empty() {
-                "unknown".to_string()
-            } else {
-                version
-            }
-        }
-        _ => "unknown".to_string(),
-    }
+    installed_version_from_command("dpkg-query", &["-W", "-f=${Version}", PACKAGE_NAME])
 }
 
 fn installed_rpm_version() -> String {
-    match Command::new("rpm")
-        .args(["-q", "--queryformat", "%{VERSION}-%{RELEASE}", PACKAGE_NAME])
-        .output()
-    {
-        Ok(output) if output.status.success() => {
-            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if version.is_empty() {
-                "unknown".to_string()
-            } else {
-                version
-            }
-        }
-        _ => "unknown".to_string(),
-    }
+    installed_version_from_command(
+        "rpm",
+        &["-q", "--queryformat", "%{VERSION}-%{RELEASE}", PACKAGE_NAME],
+    )
 }
 
+/// Installs a rebuilt Debian package on the local machine.
 pub fn install_deb(path: &Path) -> Result<()> {
-    anyhow::ensure!(path.exists(), "Debian package not found: {}", path.display());
+    anyhow::ensure!(
+        path.exists(),
+        "Debian package not found: {}",
+        path.display()
+    );
     ensure_upgrade_path(path)?;
 
     if command_exists("apt") {
@@ -91,6 +76,7 @@ pub fn install_deb(path: &Path) -> Result<()> {
     run_install(&mut command).context("dpkg -i failed")
 }
 
+/// Installs a rebuilt RPM package on the local machine.
 pub fn install_rpm(path: &Path) -> Result<()> {
     anyhow::ensure!(path.exists(), "RPM package not found: {}", path.display());
 
@@ -104,6 +90,7 @@ pub fn install_rpm(path: &Path) -> Result<()> {
     run_install(&mut command).context("rpm -Uvh failed")
 }
 
+/// Builds the `pkexec` command used for privileged package installation.
 pub fn pkexec_command(current_exe: &Path, package_path: &Path) -> Command {
     let updater_binary = updater_binary_for_privileged_install(current_exe);
     let subcommand = match PackageKind::from_path(package_path) {
@@ -123,8 +110,27 @@ fn run_install(command: &mut Command) -> Result<()> {
     let status = command
         .status()
         .context("Failed to execute installation command")?;
-    anyhow::ensure!(status.success(), "installation command exited with {status}");
+    anyhow::ensure!(
+        status.success(),
+        "installation command exited with {status}"
+    );
     Ok(())
+}
+
+fn installed_version_from_command(program: &str, args: &[&str]) -> String {
+    match Command::new(program).args(args).output() {
+        Ok(output) if output.status.success() => parse_installed_version(output.stdout),
+        _ => "unknown".to_string(),
+    }
+}
+
+fn parse_installed_version(stdout: Vec<u8>) -> String {
+    let version = String::from_utf8_lossy(&stdout).trim().to_string();
+    if version.is_empty() {
+        "unknown".to_string()
+    } else {
+        version
+    }
 }
 
 fn ensure_upgrade_path(path: &Path) -> Result<()> {
@@ -142,22 +148,7 @@ fn ensure_upgrade_path(path: &Path) -> Result<()> {
 }
 
 fn apt_install_command(path: &Path) -> Result<Command> {
-    let parent = path
-        .parent()
-        .context("Debian package path has no parent directory")?;
-    let file_name = path
-        .file_name()
-        .context("Debian package path has no file name")?
-        .to_string_lossy()
-        .into_owned();
-
-    let mut command = Command::new("apt");
-    command
-        .current_dir(parent)
-        .arg("install")
-        .arg("-y")
-        .arg(format!("./{file_name}"));
-    Ok(command)
+    install_command_in_parent("apt", path)
 }
 
 fn dpkg_install_command(path: &Path) -> Command {
@@ -167,16 +158,20 @@ fn dpkg_install_command(path: &Path) -> Command {
 }
 
 fn dnf_install_command(path: &Path) -> Result<Command> {
+    install_command_in_parent("dnf", path)
+}
+
+fn install_command_in_parent(program: &str, path: &Path) -> Result<Command> {
     let parent = path
         .parent()
-        .context("RPM package path has no parent directory")?;
+        .with_context(|| format!("{program} package path has no parent directory"))?;
     let file_name = path
         .file_name()
-        .context("RPM package path has no file name")?
+        .with_context(|| format!("{program} package path has no file name"))?
         .to_string_lossy()
         .into_owned();
 
-    let mut command = Command::new("dnf");
+    let mut command = Command::new(program);
     command
         .current_dir(parent)
         .arg("install")
@@ -248,6 +243,7 @@ fn command_exists(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Result;
 
     #[test]
     fn builds_pkexec_command_for_privileged_deb_install() {
@@ -354,5 +350,18 @@ mod tests {
         )?);
         Ok(())
     }
-}
 
+    #[test]
+    fn install_commands_require_a_file_name() {
+        let deb_error = apt_install_command(Path::new("/")).expect_err("root is not a package");
+        let rpm_error = dnf_install_command(Path::new("/")).expect_err("root is not a package");
+
+        assert!(deb_error.to_string().contains("apt package path has no"));
+        assert!(rpm_error.to_string().contains("dnf package path has no"));
+    }
+
+    #[test]
+    fn empty_installed_version_output_is_reported_as_unknown() {
+        assert_eq!(parse_installed_version(Vec::new()), "unknown");
+    }
+}
