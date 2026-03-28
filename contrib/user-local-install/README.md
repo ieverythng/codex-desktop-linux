@@ -5,7 +5,8 @@ This folder packages a user-local install layout for `codex-desktop-linux`.
 It adds:
 
 - a stable install root under `~/.local/opt/codex-desktop-linux`
-- launch/check/update/version commands under `~/.local/bin`
+- self-contained maintenance scripts under `~/.local/opt/codex-desktop-linux/bin`
+- thin launch/check/update/version wrappers under `~/.local/bin`
 - a desktop entry under `~/.local/share/applications`
 - an icon extracted from the local `Codex.dmg`
 - metadata tracking for the wrapper repo and cached `Codex.dmg`
@@ -13,13 +14,11 @@ It adds:
 
 ## Files
 
-The package is laid out as files relative to `$HOME`:
+The package is laid out as reusable payload files. The installer copies them into:
 
-- `files/.local/bin/codex-desktop`
-- `files/.local/bin/codex-desktop-check-update`
-- `files/.local/bin/codex-desktop-update`
-- `files/.local/bin/codex-desktop-version`
-- `files/.local/lib/codex-desktop-linux/common.sh`
+- `~/.local/opt/codex-desktop-linux/bin/`
+- `~/.local/opt/codex-desktop-linux/lib/codex-desktop-linux/`
+- `~/.local/bin/` wrappers
 - `files/.local/share/applications/codex-desktop.desktop`
 - `files/.config/systemd/user/codex-desktop-update.service`
 - `files/.config/systemd/user/codex-desktop-update.timer`
@@ -28,16 +27,17 @@ The package is laid out as files relative to `$HOME`:
 
 If installing manually, copy the files to:
 
-- `~/.local/bin/`
-- `~/.local/lib/codex-desktop-linux/`
+- `~/.local/opt/codex-desktop-linux/bin/`
+- `~/.local/opt/codex-desktop-linux/lib/codex-desktop-linux/`
+- `~/.local/bin/` wrappers that exec into `~/.local/opt/codex-desktop-linux/bin/`
 - `~/.local/share/applications/`
 - `~/.config/systemd/user/`
 
-The main wrapper repository itself should live at:
+The preferred git checkout location is:
 
-- `~/.local/opt/codex-desktop-linux`
+- `~/workspace/codex-desktop-linux`
 
-That is the path assumed by the helper scripts.
+The installed maintenance scripts record the repo path in user state and use that checkout for `git pull`, while rebuilding runtime assets into `~/.local/opt/codex-desktop-linux` via `CODEX_INSTALL_ROOT` / `CODEX_INSTALL_DIR`.
 
 ## Install
 
@@ -49,12 +49,13 @@ From the repository root:
 
 The installer:
 
-1. copies the helper files into the user-local locations
-2. makes the scripts executable
-3. reloads the user `systemd` daemon if available
-4. enables the weekly timer if the user bus is reachable
-5. refreshes desktop metadata if available
-6. records local metadata and extracts the icon if `Codex.dmg` already exists
+1. copies standalone helper scripts into `~/.local/opt/codex-desktop-linux`
+2. installs thin wrappers into `~/.local/bin`
+3. makes the scripts executable
+4. reloads the user `systemd` daemon if available
+5. enables the weekly timer if the user bus is reachable
+6. refreshes desktop metadata if available
+7. records local metadata and extracts the icon if `Codex.dmg` already exists
 
 ## Commands
 
@@ -71,4 +72,5 @@ codex-desktop-version
 
 - The icon is not committed as a binary asset here. It is generated locally from `Codex.dmg`.
 - The helper scripts track both upstream wrapper changes and upstream `Codex.dmg` headers.
+- The helper scripts are copied into `~/.local/opt` and do not run from the git checkout directly.
 - The weekly timer runs `codex-desktop-update --quiet`.

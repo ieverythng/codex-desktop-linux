@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_DIR="${HOME}/.local/opt/codex-desktop-linux/codex-app"
+OPT_ROOT="${HOME}/.local/opt/codex-desktop-linux"
+APP_DIR="${OPT_ROOT}/codex-app"
 exec "${APP_DIR}/start.sh" "$@"

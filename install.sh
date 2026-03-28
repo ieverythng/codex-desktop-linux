@@ -7,7 +7,8 @@ set -Eeuo pipefail
 # ============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-INSTALL_DIR="${CODEX_INSTALL_DIR:-$SCRIPT_DIR/codex-app}"
+INSTALL_ROOT="${CODEX_INSTALL_ROOT:-$SCRIPT_DIR}"
+INSTALL_DIR="${CODEX_INSTALL_DIR:-$INSTALL_ROOT/codex-app}"
 ELECTRON_VERSION="40.0.0"
 WORK_DIR="$(mktemp -d)"
 ARCH="$(uname -m)"
