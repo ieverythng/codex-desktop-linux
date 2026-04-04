@@ -14,9 +14,13 @@ use std::{
 use tokio::process::Command;
 use tracing::info;
 
-const REQUIRED_BUNDLE_FILES: [(&str, &str); 5] = [
+const REQUIRED_BUNDLE_FILES: [(&str, &str); 6] = [
     ("install.sh", "install.sh"),
     ("scripts/build-deb.sh", "scripts/build-deb.sh"),
+    (
+        "scripts/patch-linux-window-ui.js",
+        "scripts/patch-linux-window-ui.js",
+    ),
     (
         "scripts/lib/package-common.sh",
         "scripts/lib/package-common.sh",
@@ -455,6 +459,10 @@ chmod +x "${CODEX_INSTALL_DIR}/start.sh"
             FakePackageOutput::Pacman,
         )?;
         fs::write(
+            bundle_root.join("scripts/patch-linux-window-ui.js"),
+            b"console.log('patched');\n",
+        )?;
+        fs::write(
             bundle_root.join("scripts/lib/package-common.sh"),
             b"#!/bin/bash\n",
         )?;
@@ -514,6 +522,10 @@ chmod +x "${CODEX_INSTALL_DIR}/start.sh"
         fs::write(source_root.join("install.sh"), b"#!/bin/bash\n")?;
         fs::write(source_root.join("scripts/build-deb.sh"), b"#!/bin/bash\n")?;
         fs::write(
+            source_root.join("scripts/patch-linux-window-ui.js"),
+            b"console.log('patched');\n",
+        )?;
+        fs::write(
             source_root.join("scripts/lib/package-common.sh"),
             b"#!/bin/bash\n",
         )?;
@@ -530,6 +542,9 @@ chmod +x "${CODEX_INSTALL_DIR}/start.sh"
         copy_builder_bundle(&source_root, &destination_root)?;
 
         assert!(destination_root.join("scripts/build-deb.sh").exists());
+        assert!(destination_root
+            .join("scripts/patch-linux-window-ui.js")
+            .exists());
         assert!(!destination_root.join("scripts/build-rpm.sh").exists());
         assert!(!destination_root.join("scripts/build-pacman.sh").exists());
         Ok(())
