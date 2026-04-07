@@ -4,7 +4,7 @@ Run [OpenAI Codex Desktop](https://openai.com/codex/) on Linux.
 
 The official Codex Desktop app is macOS-only. This project converts the upstream macOS `Codex.dmg` into a runnable Linux Electron app, packages it as `.deb`, `.rpm`, or pacman artifacts, and includes a local updater that rebuilds future Linux packages from newer upstream DMGs.
 
-`codex-update-manager` current crate version: `0.3.2`
+`codex-update-manager` current crate version: `0.4.0`
 
 SemVer policy for the crate:
 
@@ -28,6 +28,14 @@ The build pipeline is:
 5. Write a Linux launcher into `codex-app/start.sh`
 6. Optionally package `codex-app/` as a Debian, RPM, or pacman package
 7. When installed from a native package, run `codex-update-manager` as a `systemd --user` service for local auto-updates
+
+During the ASAR patch step, the installer also attempts a Linux-specific fix for `Open in File Manager`. If the upstream minified bundle changes and that targeted patch no longer matches, the installer keeps going and emits exactly:
+
+```text
+Failed to apply Linux File Manager Patch
+```
+
+The same ASAR patch step also defaults `Translucent sidebar` to `false` on Linux by setting `opaqueWindows: true` only when the user has not already saved an explicit preference. Existing user choices still win.
 
 ## Prerequisites
 
