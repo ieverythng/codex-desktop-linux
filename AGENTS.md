@@ -79,7 +79,7 @@ Do not assume `codex-app/` is pristine. If behavior differs from `install.sh`, p
 - Launcher and `nvm`:
   GUI launchers often do not inherit the user's shell `PATH`. The generated `start.sh` explicitly searches for `codex`, including common `nvm` locations.
 - CLI preflight:
-  Before Electron launches, the generated launcher asks `codex-update-manager` to verify the installed Codex CLI and update it if the npm package is newer. If that preflight fails, the launcher exits instead of continuing into a hung Electron session.
+  Before Electron launches, the generated launcher asks `codex-update-manager` to verify the installed Codex CLI and update it if the npm package is newer. The check is best-effort: it uses a 1-hour cooldown for npm registry lookups, falls back to `npm install -g --prefix ~/.local` if a global install fails, and warns instead of blocking app launch when the refresh attempt does not succeed.
 - Launcher logging:
   The generated launcher logs to:
   `~/.cache/codex-desktop/launcher.log`
@@ -108,7 +108,7 @@ Do not assume `codex-app/` is pristine. If behavior differs from `install.sh`, p
 
 ## Crate Versioning
 
-- Current updater crate version: `0.3.0`
+- Current updater crate version: `0.3.1`
 - Bump `patch` for fixes, docs, and maintenance-only updates.
 - Bump `minor` for compatible feature additions.
 - Bump `major` for incompatible CLI, persisted-state, or install-flow changes.

@@ -2,9 +2,9 @@
 
 Run [OpenAI Codex Desktop](https://openai.com/codex/) on Linux.
 
-The official Codex Desktop app is macOS-only. This project converts the upstream macOS `Codex.dmg` into a runnable Linux Electron app, packages it as `.deb` or `.rpm`, and includes a local updater that rebuilds future Linux packages from newer upstream DMGs.
+The official Codex Desktop app is macOS-only. This project converts the upstream macOS `Codex.dmg` into a runnable Linux Electron app, packages it as `.deb`, `.rpm`, or pacman artifacts, and includes a local updater that rebuilds future Linux packages from newer upstream DMGs.
 
-`codex-update-manager` current crate version: `0.3.0`
+`codex-update-manager` current crate version: `0.3.1`
 
 SemVer policy for the crate:
 
@@ -12,20 +12,22 @@ SemVer policy for the crate:
 - `minor` for compatible feature additions
 - `patch` for fixes, docs, and maintenance-only updates
 
-## What This Repo Produces
+## Supported Workflows
 
-There are 2 supported ways to use this repo:
+This repo supports 2 primary workflows:
 
 1. Generate a local Linux app into `codex-app/` and run it directly from the checkout.
 2. Build and install a native package that installs the app under `/opt/codex-desktop` and the updater service under `systemd --user`.
 
-1. Extracts the macOS `.dmg` with `7z`
-2. Extracts and patches `app.asar`
-3. Rebuilds native Node.js modules for Linux
-4. Downloads a Linux Electron runtime
-5. Writes a Linux launcher into `codex-app/start.sh`
-6. Packages `codex-app/` as a Debian, RPM, or pacman package
-7. Starts `codex-update-manager` as a `systemd --user` service for local auto-updates
+The build pipeline is:
+
+1. Extract the macOS `.dmg` with `7z`
+2. Extract and patch `app.asar`
+3. Rebuild native Node.js modules for Linux
+4. Download a Linux Electron runtime
+5. Write a Linux launcher into `codex-app/start.sh`
+6. Optionally package `codex-app/` as a Debian, RPM, or pacman package
+7. When installed from a native package, run `codex-update-manager` as a `systemd --user` service for local auto-updates
 
 ## Prerequisites
 
@@ -49,6 +51,12 @@ npm i -g @openai/codex
 ```
 
 That helper detects `apt`, `dnf5`, `dnf`, or `pacman`, installs system packages, and bootstraps Rust through `rustup` if needed.
+
+If your system does not allow global npm installs, a rootless alternative also works:
+
+```bash
+npm i -g --prefix ~/.local @openai/codex
+```
 
 ### Ubuntu / Pop!_OS Note
 
@@ -117,6 +125,12 @@ make build-app
 make run-app
 ```
 
+If `npm i -g` needs elevated privileges on your system, replace it with:
+
+```bash
+npm i -g --prefix ~/.local @openai/codex
+```
+
 ### Use your own DMG
 
 ```bash
@@ -158,6 +172,7 @@ Or choose the format explicitly:
 ```bash
 make deb
 make rpm
+make pacman
 ```
 
 If you prefer an alias:
@@ -171,26 +186,21 @@ echo 'alias codex-desktop="~/codex-desktop-linux/codex-app/start.sh"' >> ~/.bash
 The repository can build a Debian, RPM, or pacman package from the generated `codex-app/` directory.
 
 ### Debian
+
+```bash
+./scripts/build-deb.sh
+```
+
 Optional version override:
 
 ```bash
-make deb PACKAGE_VERSION=2026.03.24.120000+deadbeef
-make rpm PACKAGE_VERSION=2026.03.24.120000+deadbeef
+PACKAGE_VERSION=2026.03.24.120000+deadbeef ./scripts/build-deb.sh
 ```
 
-Typical outputs:
+Output:
 
 ```bash
 dist/codex-desktop_YYYY.MM.DD.HHMMSS_amd64.deb
-dist/codex-desktop-YYYY.MM.DD.HHMMSS-<release>.x86_64.rpm
-```
-
-### 3. Install the generated package
-
-Install the newest package found in `dist/`:
-
-```bash
-make install
 ```
 
 ### RPM
@@ -199,21 +209,16 @@ make install
 ./scripts/build-rpm.sh
 ```
 
-### 4. Start or inspect the updater service
-
-These commands make sense after the native package is installed, because the service unit and updater binary are installed by the package.
-
-Enable and start the user service:
+Optional version override:
 
 ```bash
-make service-enable
+PACKAGE_VERSION=2026.03.24.120000+deadbeef ./scripts/build-rpm.sh
 ```
 
-Inspect the service:
+Output:
 
 ```bash
-make service-status
-codex-update-manager status --json
+dist/codex-desktop-YYYY.MM.DD.HHMMSS-<release>.x86_64.rpm
 ```
 
 ### Arch Linux (pacman)
@@ -232,6 +237,29 @@ Install it with:
 
 ```bash
 sudo pacman -U dist/codex-desktop-*.pkg.tar.zst
+```
+
+### Install the newest package from `dist/`
+
+```bash
+make install
+```
+
+### Start or inspect the updater service
+
+These commands make sense after the native package is installed, because the service unit and updater binary are installed by the package.
+
+Enable and start the user service:
+
+```bash
+make service-enable
+```
+
+Inspect the service:
+
+```bash
+make service-status
+codex-update-manager status --json
 ```
 
 ### Makefile shortcuts
@@ -288,7 +316,8 @@ The package installs a companion service named `codex-update-manager`.
 - On Arch, that final install step is `pacman -U --noconfirm` against the locally rebuilt `.pkg.tar.zst`, not `git pull`.
 - If a privileged install fails or is dismissed, the updater stays in `failed` instead of re-prompting every 15 seconds.
 - If an `Installing` state is interrupted by a crash or restart, the updater now recovers that state automatically instead of getting stuck and skipping all future upstream checks.
-- Before Electron launches, the launcher now asks the updater to verify the installed Codex CLI and update it if the npm package is newer. If that preflight fails, the launcher exits instead of continuing into a hung Electron session.
+- Before Electron launches, the launcher asks the updater to verify the installed Codex CLI and update it if the npm package is newer.
+- That CLI preflight is best-effort: it uses a 1-hour cooldown for registry checks, falls back to `npm install -g --prefix ~/.local` if a global install fails, and warns instead of aborting app launch when the automatic refresh does not succeed.
 
 Inspect the live service and runtime files with:
 
@@ -336,8 +365,8 @@ The current evaluation for a future Rust replacement for the local webview serve
 | `Error: write EPIPE` | Run `start.sh` directly instead of piping output |
 | Blank window | Check whether port 5175 is already in use: `ss -tlnp \| grep 5175` |
 | `ERR_CONNECTION_REFUSED` on `:5175` | The webview HTTP server failed to start. Ensure `python3` works and port 5175 is free |
-| `CODEX_CLI_PATH` error | Install the CLI with `npm i -g @openai/codex` |
-| Electron hangs while the CLI is outdated | Re-run the launcher and check `~/.cache/codex-desktop/launcher.log` plus `~/.local/state/codex-update-manager/service.log`; the launcher now runs a CLI preflight and should either update the CLI or fail fast with a clear error |
+| `CODEX_CLI_PATH` error | Install the CLI with `npm i -g @openai/codex` or `npm i -g --prefix ~/.local @openai/codex` |
+| Electron hangs while the CLI is outdated | Re-run the launcher and check `~/.cache/codex-desktop/launcher.log` plus `~/.local/state/codex-update-manager/service.log`; the launcher now runs a best-effort CLI preflight and warns if the automatic refresh fails |
 | GPU/Vulkan/Wayland errors | The launcher sets `--ozone-platform-hint=auto`, `--disable-gpu-sandbox`, `--disable-gpu-compositing`, and `--enable-features=WaylandWindowDecorations` by default. If you need X11 explicitly, try `./codex-app/start.sh --ozone-platform=x11` |
 | Window flickering | GPU compositing is now disabled by default (`--disable-gpu-compositing`). If flickering persists, try `./codex-app/start.sh --disable-gpu` to fully disable GPU acceleration |
 | Sandbox errors | The launcher already sets `--no-sandbox` |
