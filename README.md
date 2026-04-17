@@ -127,6 +127,14 @@ This installs the app into `codex-app/` in the current directory. You can also e
 nix develop github:ilysenko/codex-desktop-linux
 ```
 
+**Note on `hash mismatch` errors.** The flake pins the SRI hash of the upstream `Codex.dmg`, which OpenAI republishes at the same URL on every release. A GitHub Actions bot refreshes that hash in `main` once every 24 hours, so most of the time `nix run` just works. If you happen to try right after a new Codex release and hit:
+
+```text
+error: hash mismatch in fixed-output derivation
+```
+
+wait up to a day for the bot to publish the updated hash, then retry. If it still fails after that, please open an issue — the bot may need a manual nudge.
+
 ## Quick Start
 
 Clone the repo, generate the local app, and run it:

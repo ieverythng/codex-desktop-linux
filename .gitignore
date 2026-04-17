@@ -4,3 +4,4 @@ codex-app/
 target/
 dist/
 .idea/
+.claude/
