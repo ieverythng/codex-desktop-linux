@@ -175,9 +175,12 @@ test_missing_input_failure() {
     info "Checking missing-input failure path"
     local workspace="$TMP_DIR/missing"
     local bin_dir="$workspace/bin"
+    local rpm_app_dir="$workspace/rpm-app"
+    local rpm_log="$workspace/rpm-missing-runtime.log"
 
     mkdir -p "$workspace"
     make_stub_bin_dir "$bin_dir"
+    make_fake_app "$rpm_app_dir"
     cat > "$bin_dir/dpkg" <<'SCRIPT'
 #!/bin/bash
 echo amd64
@@ -191,6 +194,11 @@ SCRIPT
     if PATH="$bin_dir:$PATH" APP_DIR_OVERRIDE="$workspace/does-not-exist" PKG_ROOT_OVERRIDE="$workspace/deb-root" "$REPO_DIR/scripts/build-deb.sh" >/dev/null 2>&1; then
         fail "build-deb.sh should fail when APP_DIR is missing"
     fi
+
+    if APP_DIR_OVERRIDE="$rpm_app_dir" PACKAGED_RUNTIME_SOURCE="$workspace/does-not-exist.sh" "$REPO_DIR/scripts/build-rpm.sh" >"$rpm_log" 2>&1; then
+        fail "build-rpm.sh should fail when PACKAGED_RUNTIME_SOURCE is missing"
+    fi
+    assert_contains "$rpm_log" "Missing packaged launcher runtime helper"
 }
 
 test_launcher_template_sanity() {
