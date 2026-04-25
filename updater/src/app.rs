@@ -12,7 +12,11 @@ use crate::{
 use anyhow::{Context, Result};
 use chrono::Utc;
 use reqwest::Client;
-use std::path::Path;
+use std::{
+    fs::{self, OpenOptions},
+    io::Write,
+    path::{Path, PathBuf},
+};
 use tokio::time::{self, Duration};
 use tracing::{error, info, warn};
 
@@ -103,6 +107,49 @@ fn summarize_command_output(output: &[u8]) -> Option<String> {
     let mut lines = text.lines().rev().take(3).collect::<Vec<_>>();
     lines.reverse();
     Some(lines.join(" | "))
+}
+
+struct CheckLock {
+    path: PathBuf,
+}
+
+impl Drop for CheckLock {
+    fn drop(&mut self) {
+        if let Err(error) = fs::remove_file(&self.path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                warn!(?error, path = %self.path.display(), "failed to remove check lock");
+            }
+        }
+    }
+}
+
+fn try_acquire_check_lock(paths: &RuntimePaths) -> Result<Option<CheckLock>> {
+    let lock_path = paths.state_dir.join("check.lock");
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock_path)
+    {
+        Ok(mut file) => {
+            writeln!(file, "{}", std::process::id())
+                .with_context(|| format!("Failed to write {}", lock_path.display()))?;
+            Ok(Some(CheckLock { path: lock_path }))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            info!("skipping upstream check because another check is already active");
+            Ok(None)
+        }
+        Err(error) => {
+            Err(error).with_context(|| format!("Failed to create {}", lock_path.display()))
+        }
+    }
+}
+
+fn update_install_is_pending(status: &UpdateStatus) -> bool {
+    matches!(
+        status,
+        UpdateStatus::ReadyToInstall | UpdateStatus::WaitingForAppExit | UpdateStatus::Installing
+    )
 }
 
 async fn run_daemon(
@@ -223,13 +270,14 @@ async fn run_check_cycle(
 ) -> Result<()> {
     let retrying_failed_update = state.status == UpdateStatus::Failed;
 
-    if matches!(
-        state.status,
-        UpdateStatus::ReadyToInstall | UpdateStatus::WaitingForAppExit | UpdateStatus::Installing
-    ) {
+    if update_install_is_pending(&state.status) {
         info!("skipping upstream check because an update is already pending");
         return Ok(());
     }
+
+    let Some(_check_lock) = try_acquire_check_lock(paths)? else {
+        return Ok(());
+    };
 
     let client = Client::builder().build()?;
 
@@ -429,10 +477,14 @@ fn compare_generated_versions(left: &str, right: &str) -> Option<std::cmp::Order
 }
 
 fn parse_generated_version(version: &str) -> Option<Vec<u32>> {
-    let base = version
+    let without_metadata = version
         .split_once('+')
         .map(|(prefix, _)| prefix)
         .unwrap_or(version);
+    let base = without_metadata
+        .split_once('-')
+        .map(|(prefix, _)| prefix)
+        .unwrap_or(without_metadata);
     let mut parts = Vec::new();
     for segment in base.split('.') {
         parts.push(segment.parse::<u32>().ok()?);
@@ -634,12 +686,53 @@ mod tests {
             app_executable_path: temp.path().join("not-running-electron"),
         };
 
+        for status in [
+            UpdateStatus::ReadyToInstall,
+            UpdateStatus::WaitingForAppExit,
+            UpdateStatus::Installing,
+        ] {
+            let mut state = PersistedState::new(true);
+            state.status = status.clone();
+
+            run_check_cycle(&config, &mut state, &paths).await?;
+
+            assert_eq!(state.status, status);
+            assert_eq!(state.last_check_at, None);
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_check_cycle_skips_when_check_lock_exists() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let paths = RuntimePaths {
+            config_file: temp.path().join("config/config.toml"),
+            state_file: temp.path().join("state/state.json"),
+            log_file: temp.path().join("state/service.log"),
+            cache_dir: temp.path().join("cache"),
+            state_dir: temp.path().join("state"),
+            config_dir: temp.path().join("config"),
+        };
+        paths.ensure_dirs()?;
+        std::fs::write(paths.state_dir.join("check.lock"), b"12345")?;
+
+        let config = RuntimeConfig {
+            dmg_url: "https://invalid.example/Codex.dmg".to_string(),
+            initial_check_delay_seconds: 1,
+            check_interval_hours: 6,
+            auto_install_on_app_exit: true,
+            notifications: false,
+            workspace_root: temp.path().join("cache"),
+            builder_bundle_root: temp.path().join("builder"),
+            app_executable_path: temp.path().join("not-running-electron"),
+        };
+
         let mut state = PersistedState::new(true);
-        state.status = UpdateStatus::ReadyToInstall;
 
         run_check_cycle(&config, &mut state, &paths).await?;
 
-        assert_eq!(state.status, UpdateStatus::ReadyToInstall);
+        assert_eq!(state.status, UpdateStatus::Idle);
         assert_eq!(state.last_check_at, None);
         Ok(())
     }
@@ -732,6 +825,17 @@ mod tests {
         assert_eq!(
             compare_generated_versions("2026.04.01.035152", "2026.03.27.025604+1086e799"),
             Some(std::cmp::Ordering::Greater)
+        );
+    }
+
+    #[test]
+    fn generated_versions_ignore_package_release_suffixes() {
+        assert_eq!(
+            compare_generated_versions(
+                "2026.04.25.054929-90dd7716x11.fc43",
+                "2026.04.25.054929+90dd7716",
+            ),
+            Some(std::cmp::Ordering::Equal)
         );
     }
 
