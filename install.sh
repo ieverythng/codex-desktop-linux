@@ -34,6 +34,8 @@ Or install manually:
   sudo dnf install nodejs npm python3 p7zip p7zip-plugins curl unzip                # Fedora <41 (dnf)
     && sudo dnf groupinstall 'Development Tools'
   sudo pacman -S nodejs npm python p7zip curl unzip zstd base-devel                 # Arch
+  sudo zypper install nodejs-default npm-default python3 p7zip-full curl unzip      # openSUSE
+    && sudo zypper install -t pattern devel_basis
 EOF
 }
 

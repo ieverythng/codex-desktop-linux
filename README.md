@@ -58,7 +58,7 @@ bash scripts/install-deps.sh
 npm i -g @openai/codex
 ```
 
-That helper detects `apt`, `dnf5`, `dnf`, or `pacman`, installs system packages, and bootstraps Rust through `rustup` if needed.
+That helper detects `apt`, `dnf5`, `dnf`, `pacman`, or `zypper`, installs system packages, and bootstraps Rust through `rustup` if needed.
 
 If your system does not allow global npm installs, a rootless alternative also works:
 
@@ -93,7 +93,26 @@ The easiest way to install the required system packages is:
 bash scripts/install-deps.sh
 ```
 
-That helper detects `apt`, `dnf5`, `dnf`, or `pacman`, installs the system dependencies, and bootstraps Rust through `rustup` if needed.
+That helper detects `apt`, `dnf5`, `dnf`, `pacman`, or `zypper`, installs the system dependencies, and bootstraps Rust through `rustup` if needed.
+
+### openSUSE
+
+```bash
+bash scripts/install-deps.sh
+```
+
+Or manually:
+
+```bash
+sudo zypper install nodejs-default npm-default python3 p7zip-full curl unzip
+sudo zypper install -t pattern devel_basis
+```
+
+You also need the **Rust toolchain** for the updater crate:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
 
 ### Arch Linux
 
@@ -230,7 +249,7 @@ Output:
 dist/codex-desktop_YYYY.MM.DD.HHMMSS_amd64.deb
 ```
 
-### RPM
+### RPM (Fedora / openSUSE)
 
 Requires `codex-app/` to exist (run `make build-app` first).
 
@@ -345,6 +364,7 @@ The package installs a companion service named `codex-update-manager`.
 - If the app is open, the update waits until Electron exits.
 - When the app is closed, the updater uses `pkexec` only for the final native-package install step.
 - On Arch, that final install step is `pacman -U --noconfirm` against the locally rebuilt `.pkg.tar.zst`, not `git pull`.
+- On openSUSE, that final install step is `zypper --non-interactive --no-gpg-checks install` against the locally rebuilt `.rpm` (the package is unsigned because it is built locally).
 - If a privileged install fails or is dismissed, the updater stays in `failed` instead of re-prompting every 15 seconds.
 - If an `Installing` state is interrupted by a crash or restart, the updater now recovers that state automatically instead of getting stuck and skipping all future upstream checks.
 - Before Electron launches, the launcher asks the updater to verify the installed Codex CLI and update it if the npm package is newer.
