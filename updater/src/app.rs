@@ -10,7 +10,7 @@ use crate::{
     upstream,
 };
 use anyhow::{Context, Result};
-use chrono::Utc;
+use chrono::{Duration as ChronoDuration, Utc};
 use fs4::fs_std::FileExt;
 use reqwest::Client;
 use std::{
@@ -37,7 +37,9 @@ pub async fn run(cli: Cli) -> Result<()> {
 
     match cli.command {
         Commands::Daemon => run_daemon(&config, &mut state, &paths).await,
-        Commands::CheckNow => run_check_now(&config, &mut state, &paths).await,
+        Commands::CheckNow { if_stale } => {
+            run_check_now(&config, &mut state, &paths, if_stale).await
+        }
         Commands::CliPreflight {
             cli_path,
             print_path,
@@ -211,12 +213,26 @@ async fn run_check_now(
     config: &RuntimeConfig,
     state: &mut PersistedState,
     paths: &RuntimePaths,
+    if_stale: bool,
 ) -> Result<()> {
     sync_and_persist(config, state, paths)?;
     recover_interrupted_install(state, paths)?;
     maybe_notify_installed(state, paths, config.notifications)?;
+    if if_stale && upstream_check_is_fresh(config, state) {
+        info!("skipping check-now because the last successful upstream check is still fresh");
+        return reconcile_pending_install(config, state, paths).await;
+    }
     run_check_cycle(config, state, paths).await?;
     reconcile_pending_install(config, state, paths).await
+}
+
+fn upstream_check_is_fresh(config: &RuntimeConfig, state: &PersistedState) -> bool {
+    let Some(last_successful_check_at) = state.last_successful_check_at else {
+        return false;
+    };
+
+    let freshness_window = ChronoDuration::hours(config.check_interval_hours as i64);
+    Utc::now().signed_duration_since(last_successful_check_at) < freshness_window
 }
 
 fn run_status(state: &mut PersistedState, paths: &RuntimePaths, json: bool) -> Result<()> {
@@ -616,6 +632,29 @@ fn notify_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upstream_check_freshness_respects_configured_interval() {
+        let config = RuntimeConfig {
+            dmg_url: "https://example.com/Codex.dmg".to_string(),
+            initial_check_delay_seconds: 1,
+            check_interval_hours: 6,
+            auto_install_on_app_exit: true,
+            notifications: false,
+            workspace_root: std::path::PathBuf::from("/tmp/cache"),
+            builder_bundle_root: std::path::PathBuf::from("/tmp/builder"),
+            app_executable_path: std::path::PathBuf::from("/tmp/electron"),
+        };
+
+        let mut state = PersistedState::new(true);
+        assert!(!upstream_check_is_fresh(&config, &state));
+
+        state.last_successful_check_at = Some(Utc::now() - ChronoDuration::hours(1));
+        assert!(upstream_check_is_fresh(&config, &state));
+
+        state.last_successful_check_at = Some(Utc::now() - ChronoDuration::hours(7));
+        assert!(!upstream_check_is_fresh(&config, &state));
+    }
 
     #[tokio::test]
     async fn failed_state_with_existing_deb_stays_failed() -> Result<()> {
