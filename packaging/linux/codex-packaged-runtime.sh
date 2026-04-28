@@ -1,6 +1,10 @@
 #!/bin/bash
 
 codex_packaged_runtime_prelaunch() {
+    codex_packaged_runtime_prelaunch_background >/dev/null 2>&1 &
+}
+
+codex_packaged_runtime_prelaunch_background() {
     if ! command -v systemctl >/dev/null 2>&1; then
         return 0
     fi
@@ -50,11 +54,11 @@ codex_packaged_runtime_trigger_update_check() {
             --unit=codex-update-manager-launch-check \
             --collect \
             --quiet \
-            /usr/bin/codex-update-manager check-now >/dev/null 2>&1 || true
+            /usr/bin/codex-update-manager check-now --if-stale >/dev/null 2>&1 || true
         return 0
     fi
 
-    nohup codex-update-manager check-now >/dev/null 2>&1 &
+    codex-update-manager check-now --if-stale >/dev/null 2>&1 || true
 }
 
 codex_packaged_runtime_export_env() {

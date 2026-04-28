@@ -359,7 +359,7 @@ The package installs a companion service named `codex-update-manager`.
 
 - It runs as a `systemd --user` service.
 - The launcher starts it in best-effort mode on app launch.
-- Each app launch also triggers a non-blocking `check-now`; the updater skips that request if another check, rebuild, or install is already active.
+- Each app launch also triggers a background `check-now --if-stale`; the updater skips that request when the last successful upstream check is still fresh or another check, rebuild, or install is already active.
 - It checks the upstream `Codex.dmg` on daemon startup and every 6 hours.
 - When a new DMG is detected, it rebuilds a local native package using `/opt/codex-desktop/update-builder`.
 - If the app is open, the update waits until Electron exits.
@@ -368,8 +368,8 @@ The package installs a companion service named `codex-update-manager`.
 - On openSUSE, that final install step is `zypper --non-interactive --no-gpg-checks install` against the locally rebuilt `.rpm` (the package is unsigned because it is built locally).
 - If a privileged install fails or is dismissed, the updater stays in `failed` instead of re-prompting every 15 seconds.
 - If an `Installing` state is interrupted by a crash or restart, the updater now recovers that state automatically instead of getting stuck and skipping all future upstream checks.
-- Before Electron launches, the launcher asks the updater to verify the installed Codex CLI and update it if the npm package is newer.
-- That CLI preflight is best-effort: it uses a 1-hour cooldown for registry checks, falls back to `npm install -g --prefix ~/.local` if a global install fails, and warns instead of aborting app launch when the automatic refresh does not succeed.
+- Before Electron launches, the launcher only resolves a usable Codex CLI path. The updater CLI preflight runs in the background by default so npm registry checks and installs do not block the first window.
+- That CLI preflight is best-effort: it uses a 1-hour cooldown for registry checks, falls back to `npm install -g --prefix ~/.local` if a global install fails, and keeps the app launch on the current CLI when the automatic refresh does not succeed. Set `CODEX_SYNC_CLI_PREFLIGHT=1` to restore the old synchronous preflight behavior for debugging.
 
 Inspect the live service and runtime files with:
 
@@ -404,8 +404,8 @@ The macOS Codex app is an Electron application. The core code (`app.asar`) is pl
 
 The installer replaces the macOS Electron with a Linux build and recompiles the native modules using `@electron/rebuild`. The `sparkle` module is removed because it is macOS-only.
 
-The extracted app expects a local webview origin on `localhost:5175`, so the launcher starts `python3 -m http.server 5175` from `content/webview/`, waits for the socket to become reachable, and only then launches Electron.
-The launcher now also verifies that `http://127.0.0.1:5175/index.html` contains the expected Codex startup markers before Electron launches, so a port collision or incomplete extracted webview fails fast in `launcher.log` instead of hanging on the splash screen.
+The extracted app expects a local webview origin on `127.0.0.1:5175`, so the launcher starts `python3 -m http.server 5175 --bind 127.0.0.1` from `content/webview/`, waits for the socket to become reachable, and only then launches Electron. The launcher tracks the owned webview server PID under XDG state, rediscovers an orphaned server from the same `content/webview/` directory, and reuses an already verified server instead of killing every process that matches the port.
+The launcher also verifies that `http://127.0.0.1:5175/index.html` contains the expected Codex startup markers before cold-starting Electron, so a port collision or incomplete extracted webview fails fast in `launcher.log` instead of hanging on the splash screen. If an existing Electron process is detected, the launcher uses a warm-start handoff path and lets the app's single-instance handler focus the running window.
 
 Native-package-only launcher behavior such as desktop-entry hints, `codex-update-manager` session bootstrapping, and the background launch-time update check lives in `packaging/linux/codex-packaged-runtime.sh`, which the generated launcher loads only when present inside a packaged install.
 
