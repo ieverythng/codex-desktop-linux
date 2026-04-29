@@ -110,9 +110,12 @@ prepare_install() {
 # ---- Check dependencies ----
 check_deps() {
     local missing=()
-    for cmd in node npm npx python3 7z curl unzip; do
+    for cmd in node npm npx python3 curl unzip; do
         command -v "$cmd" &>/dev/null || missing+=("$cmd")
     done
+    if ! command -v 7z &>/dev/null && ! command -v 7zz &>/dev/null; then
+        missing+=("7z/7zz")
+    fi
     if [ ${#missing[@]} -ne 0 ]; then
         error "Missing dependencies: ${missing[*]}
 $(dependency_help)"
@@ -816,6 +819,7 @@ cleanup_launcher() {
 launch_electron() {
     cd "$SCRIPT_DIR"
     log_phase "electron_launch"
+    unset ELECTRON_RUN_AS_NODE
 
     if [ "$WARM_START" -eq 1 ]; then
         "$SCRIPT_DIR/electron" \

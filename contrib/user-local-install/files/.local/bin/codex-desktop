@@ -3,4 +3,5 @@ set -euo pipefail
 
 OPT_ROOT="${HOME}/.local/opt/codex-desktop-linux"
 APP_DIR="${OPT_ROOT}/codex-app"
+export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:/usr/local/bin:${PATH}"
 exec "${APP_DIR}/start.sh" "$@"

@@ -229,6 +229,9 @@ SCRIPT
 
 test_launcher_template_sanity() {
     info "Checking launcher template markers"
+    assert_contains "$REPO_DIR/install.sh" 'command -v 7z'
+    assert_contains "$REPO_DIR/install.sh" 'command -v 7zz'
+    assert_contains "$REPO_DIR/install.sh" 'missing+=("7z/7zz")'
     assert_contains "$REPO_DIR/install.sh" "python3 -m http.server 5175 --bind 127.0.0.1"
     assert_contains "$REPO_DIR/install.sh" "WEBVIEW_PID_FILE"
     assert_contains "$REPO_DIR/install.sh" "owned_webview_server_pid"
@@ -240,6 +243,7 @@ test_launcher_template_sanity() {
     assert_contains "$REPO_DIR/install.sh" "wait_for_webview_server"
     assert_contains "$REPO_DIR/install.sh" "verify_webview_origin"
     assert_contains "$REPO_DIR/install.sh" "Webview origin verified."
+    assert_contains "$REPO_DIR/install.sh" "unset ELECTRON_RUN_AS_NODE"
     assert_not_contains "$REPO_DIR/install.sh" "pkill -f \"http.server 5175\""
     assert_contains "$REPO_DIR/install.sh" "--app-id=codex-desktop"
     assert_contains "$REPO_DIR/install.sh" "--ozone-platform-hint=auto"

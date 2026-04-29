@@ -3,8 +3,10 @@ set -euo pipefail
 
 OPT_ROOT="${HOME}/.local/opt/codex-desktop-linux"
 APP_DIR="${OPT_ROOT}/codex-app"
-DMG_FILE="${OPT_ROOT}/Codex.dmg"
+DMG_FILE=""
 DMG_URL="https://persistent.oaistatic.com/codex-app-prod/Codex.dmg"
+
+export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:/usr/local/bin:${PATH}"
 
 XDG_DATA_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}"
 XDG_STATE_HOME="${XDG_STATE_HOME:-${HOME}/.local/state}"
@@ -29,6 +31,14 @@ load_install_config() {
         source "$INSTALL_CONFIG_FILE"
     fi
     REPO_DIR="${REPO_DIR:-$REPO_DIR_DEFAULT}"
+
+    if [ -z "${DMG_FILE:-}" ]; then
+        if [ -f "${OPT_ROOT}/Codex.dmg" ]; then
+            DMG_FILE="${OPT_ROOT}/Codex.dmg"
+        else
+            DMG_FILE="${REPO_DIR}/Codex.dmg"
+        fi
+    fi
 }
 
 load_metadata() {
@@ -62,6 +72,11 @@ header_value() {
 
 extract_icon() {
     ensure_layout
+    if [ -f "${REPO_DIR}/assets/codex.png" ]; then
+        cp "${REPO_DIR}/assets/codex.png" "$ICON_PATH"
+        return 0
+    fi
+
     local tmp_dir
     tmp_dir="$(mktemp -d)"
     trap 'rm -rf "$tmp_dir"' RETURN
