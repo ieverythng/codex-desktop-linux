@@ -14,23 +14,33 @@ use std::{
 use tokio::process::Command;
 use tracing::info;
 
-const REQUIRED_BUNDLE_FILES: [(&str, &str); 6] = [
+const REQUIRED_BUNDLE_FILES: [(&str, &str); 12] = [
+    ("Cargo.toml", "Cargo.toml"),
+    ("Cargo.lock", "Cargo.lock"),
+    ("computer-use-linux", "computer-use-linux"),
+    ("updater", "updater"),
+    (
+        "plugins/openai-bundled/plugins/computer-use",
+        "plugins/openai-bundled/plugins/computer-use",
+    ),
     ("install.sh", "install.sh"),
+    ("launcher/start.sh.template", "launcher/start.sh.template"),
     ("scripts/build-deb.sh", "scripts/build-deb.sh"),
     (
         "scripts/patch-linux-window-ui.js",
         "scripts/patch-linux-window-ui.js",
     ),
-    (
-        "scripts/lib/package-common.sh",
-        "scripts/lib/package-common.sh",
-    ),
+    ("scripts/lib", "scripts/lib"),
     ("packaging/linux", "packaging/linux"),
     ("assets/codex.png", "assets/codex.png"),
 ];
-const OPTIONAL_BUNDLE_FILES: [(&str, &str); 2] = [
+const OPTIONAL_BUNDLE_FILES: [(&str, &str); 3] = [
     ("scripts/build-rpm.sh", "scripts/build-rpm.sh"),
     ("scripts/build-pacman.sh", "scripts/build-pacman.sh"),
+    (
+        "scripts/rebuild-candidate.sh",
+        "scripts/rebuild-candidate.sh",
+    ),
 ];
 const PACMAN_PACKAGE_SUFFIXES: &[&str] = &[
     ".pkg.tar.zst",
@@ -58,7 +68,7 @@ pub async fn build_update(
     dmg_path: &Path,
 ) -> Result<BuildArtifacts> {
     let workspace = BuilderWorkspace::prepare(&config.workspace_root, candidate_version)?;
-    let build_path = build_command_path();
+    let build_path = build_command_path(&config.builder_bundle_root);
 
     state.status = UpdateStatus::PreparingWorkspace;
     state.artifact_paths.workspace_dir = Some(workspace.workspace_dir.clone());
@@ -72,6 +82,10 @@ pub async fn build_update(
         Command::new(workspace.bundle_dir.join("install.sh"))
             .arg(dmg_path)
             .env("CODEX_INSTALL_DIR", &workspace.app_dir)
+            .env(
+                "CODEX_MANAGED_NODE_SOURCE",
+                config.builder_bundle_root.join("node-runtime"),
+            )
             .env("PATH", &build_path)
             .current_dir(&workspace.bundle_dir),
         &workspace.install_log,
@@ -108,6 +122,7 @@ pub async fn build_update(
         dmg_path: Some(dmg_path.to_path_buf()),
         workspace_dir: Some(workspace.workspace_dir.clone()),
         package_path: Some(package_path.clone()),
+        rollback_package_path: state.artifact_paths.rollback_package_path.clone(),
     };
     state.save(&paths.state_file)?;
     info!(candidate_version, package = %package_path.display(), "local update build ready");
@@ -277,12 +292,37 @@ fn is_native_package_file(path: &Path) -> bool {
             .any(|suffix| name.ends_with(suffix))
 }
 
-fn build_command_path() -> OsString {
-    let mut entries = preferred_node_bin_dirs();
+fn build_command_path(builder_bundle_root: &Path) -> OsString {
+    let mut entries = managed_node_bin_dirs(builder_bundle_root);
+    entries.extend(preferred_node_bin_dirs());
     entries.extend(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
     ));
+    entries.extend(system_bin_dirs());
     std::env::join_paths(entries).unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
+}
+
+fn managed_node_bin_dirs(builder_bundle_root: &Path) -> Vec<PathBuf> {
+    let bin_dir = builder_bundle_root.join("node-runtime/bin");
+    if is_node_toolchain_dir(&bin_dir) {
+        vec![bin_dir]
+    } else {
+        Vec::new()
+    }
+}
+
+fn system_bin_dirs() -> Vec<PathBuf> {
+    [
+        "/usr/local/sbin",
+        "/usr/local/bin",
+        "/usr/sbin",
+        "/usr/bin",
+        "/sbin",
+        "/bin",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .collect()
 }
 
 fn preferred_node_bin_dirs() -> Vec<PathBuf> {
@@ -403,6 +443,39 @@ touch "${DIST_DIR_OVERRIDE}/codex-desktop-${VER}-1-x86_64.pkg.tar.zst"
         Ok(())
     }
 
+    fn write_fake_computer_use_bundle(root: &Path) -> Result<()> {
+        fs::write(
+            root.join("Cargo.toml"),
+            b"[workspace]\nmembers = [\"computer-use-linux\", \"updater\"]\n",
+        )?;
+        fs::write(root.join("Cargo.lock"), b"# fake lock\n")?;
+        fs::create_dir_all(root.join("computer-use-linux/src"))?;
+        fs::write(
+            root.join("computer-use-linux/Cargo.toml"),
+            b"[package]\nname = \"codex-computer-use-linux\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )?;
+        fs::write(
+            root.join("computer-use-linux/src/main.rs"),
+            b"fn main() {}\n",
+        )?;
+        fs::create_dir_all(root.join("updater/src"))?;
+        fs::write(
+            root.join("updater/Cargo.toml"),
+            b"[package]\nname = \"codex-update-manager\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )?;
+        fs::write(root.join("updater/src/main.rs"), b"fn main() {}\n")?;
+        fs::create_dir_all(root.join("plugins/openai-bundled/plugins/computer-use/.codex-plugin"))?;
+        fs::write(
+            root.join("plugins/openai-bundled/plugins/computer-use/.codex-plugin/plugin.json"),
+            b"{\"name\":\"computer-use\",\"version\":\"0.1.0\"}\n",
+        )?;
+        fs::write(
+            root.join("plugins/openai-bundled/plugins/computer-use/.mcp.json"),
+            b"{\"mcpServers\":{}}\n",
+        )?;
+        Ok(())
+    }
+
     #[tokio::test]
     async fn builds_update_with_fake_bundle() -> Result<()> {
         let temp = tempdir()?;
@@ -410,8 +483,14 @@ touch "${DIST_DIR_OVERRIDE}/codex-desktop-${VER}-1-x86_64.pkg.tar.zst"
         let state_root = temp.path().join("state");
         let cache_root = temp.path().join("cache");
         fs::create_dir_all(bundle_root.join("scripts/lib"))?;
+        fs::create_dir_all(bundle_root.join("launcher"))?;
         fs::create_dir_all(bundle_root.join("packaging/linux"))?;
         fs::create_dir_all(bundle_root.join("assets"))?;
+        write_fake_computer_use_bundle(&bundle_root)?;
+        fs::write(
+            bundle_root.join("launcher/start.sh.template"),
+            b"# fake launcher template\n",
+        )?;
         fs::write(bundle_root.join("assets/codex.png"), b"png")?;
         fs::write(
             bundle_root.join("packaging/linux/control"),
@@ -428,6 +507,34 @@ touch "${DIST_DIR_OVERRIDE}/codex-desktop-${VER}-1-x86_64.pkg.tar.zst"
         fs::write(
             bundle_root.join("packaging/linux/codex-update-manager.service"),
             "[Unit]\nDescription=Codex Update Manager\n",
+        )?;
+        fs::write(
+            bundle_root.join("packaging/linux/codex-update-manager-user-service.sh"),
+            "#!/bin/bash\n",
+        )?;
+        fs::write(
+            bundle_root.join("packaging/linux/codex-update-manager.postinst"),
+            "#!/bin/sh\nexit 0\n",
+        )?;
+        fs::write(
+            bundle_root.join("packaging/linux/codex-update-manager.prerm"),
+            "#!/bin/sh\nexit 0\n",
+        )?;
+        fs::write(
+            bundle_root.join("packaging/linux/codex-update-manager.postrm"),
+            "#!/bin/sh\nexit 0\n",
+        )?;
+        fs::write(
+            bundle_root.join("packaging/linux/codex-packaged-runtime.sh"),
+            "#!/bin/bash\n",
+        )?;
+        fs::write(
+            bundle_root.join("packaging/linux/PKGBUILD.template"),
+            "pkgname=codex\n",
+        )?;
+        fs::write(
+            bundle_root.join("packaging/linux/codex-desktop.install"),
+            "post_install() { :; }\n",
         )?;
         fs::write(
             bundle_root.join("install.sh"),
@@ -460,11 +567,19 @@ chmod +x "${CODEX_INSTALL_DIR}/start.sh"
             FakePackageOutput::Pacman,
         )?;
         fs::write(
+            bundle_root.join("scripts/rebuild-candidate.sh"),
+            b"#!/bin/bash\n",
+        )?;
+        fs::write(
             bundle_root.join("scripts/patch-linux-window-ui.js"),
             b"console.log('patched');\n",
         )?;
         fs::write(
             bundle_root.join("scripts/lib/package-common.sh"),
+            b"#!/bin/bash\n",
+        )?;
+        fs::write(
+            bundle_root.join("scripts/lib/node-runtime.sh"),
             b"#!/bin/bash\n",
         )?;
 
@@ -503,6 +618,14 @@ chmod +x "${CODEX_INSTALL_DIR}/start.sh"
         assert_eq!(state.status, UpdateStatus::ReadyToInstall);
         assert!(artifacts.workspace_dir.exists());
         assert!(artifacts.package_path.exists());
+        assert!(artifacts
+            .workspace_dir
+            .join("builder/scripts/rebuild-candidate.sh")
+            .exists());
+        assert!(artifacts
+            .workspace_dir
+            .join("builder/scripts/lib/node-runtime.sh")
+            .exists());
         assert!(
             is_native_package_file(&artifacts.package_path),
             "expected a native package (.deb, .rpm, or .pkg.tar.zst), got {}",
@@ -518,9 +641,15 @@ chmod +x "${CODEX_INSTALL_DIR}/start.sh"
         let destination_root = temp.path().join("destination");
 
         fs::create_dir_all(source_root.join("scripts/lib"))?;
+        fs::create_dir_all(source_root.join("launcher"))?;
         fs::create_dir_all(source_root.join("packaging/linux"))?;
         fs::create_dir_all(source_root.join("assets"))?;
+        write_fake_computer_use_bundle(&source_root)?;
         fs::write(source_root.join("install.sh"), b"#!/bin/bash\n")?;
+        fs::write(
+            source_root.join("launcher/start.sh.template"),
+            b"# fake launcher template\n",
+        )?;
         fs::write(source_root.join("scripts/build-deb.sh"), b"#!/bin/bash\n")?;
         fs::write(
             source_root.join("scripts/patch-linux-window-ui.js"),
@@ -528,6 +657,10 @@ chmod +x "${CODEX_INSTALL_DIR}/start.sh"
         )?;
         fs::write(
             source_root.join("scripts/lib/package-common.sh"),
+            b"#!/bin/bash\n",
+        )?;
+        fs::write(
+            source_root.join("scripts/lib/node-runtime.sh"),
             b"#!/bin/bash\n",
         )?;
         fs::write(
@@ -545,6 +678,14 @@ chmod +x "${CODEX_INSTALL_DIR}/start.sh"
         assert!(destination_root.join("scripts/build-deb.sh").exists());
         assert!(destination_root
             .join("scripts/patch-linux-window-ui.js")
+            .exists());
+        assert!(destination_root.join("computer-use-linux").exists());
+        assert!(destination_root.join("updater").exists());
+        assert!(destination_root
+            .join("plugins/openai-bundled/plugins/computer-use/.mcp.json")
+            .exists());
+        assert!(destination_root
+            .join("scripts/lib/node-runtime.sh")
             .exists());
         assert!(!destination_root.join("scripts/build-rpm.sh").exists());
         assert!(!destination_root.join("scripts/build-pacman.sh").exists());
@@ -594,6 +735,30 @@ chmod +x "${CODEX_INSTALL_DIR}/start.sh"
         let directories = collect_nvm_bin_dirs(&nvm_root);
         assert_eq!(directories.first(), Some(&current_bin));
         assert!(directories.contains(&version_bin));
+        Ok(())
+    }
+
+    #[test]
+    fn build_command_path_includes_system_dirs() {
+        let path = build_command_path(Path::new("/tmp/missing-codex-builder"));
+        let directories = std::env::split_paths(&path).collect::<Vec<_>>();
+
+        assert!(directories.iter().any(|dir| dir == Path::new("/usr/bin")));
+        assert!(directories.iter().any(|dir| dir == Path::new("/bin")));
+    }
+
+    #[test]
+    fn build_command_path_prefers_packaged_managed_node_runtime() -> Result<()> {
+        let temp = tempdir()?;
+        let runtime_bin = temp.path().join("node-runtime/bin");
+        fs::create_dir_all(&runtime_bin)?;
+        for binary in ["node", "npm", "npx"] {
+            fs::write(runtime_bin.join(binary), b"bin")?;
+        }
+
+        let path = build_command_path(temp.path());
+        let directories = std::env::split_paths(&path).collect::<Vec<_>>();
+        assert_eq!(directories.first(), Some(&runtime_bin));
         Ok(())
     }
 }

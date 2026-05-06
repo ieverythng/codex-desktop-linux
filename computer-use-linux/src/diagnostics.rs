@@ -1,0 +1,765 @@
+use schemars::JsonSchema;
+use serde::Serialize;
+use std::{
+    collections::HashMap,
+    env, fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+const DESKTOP_ENV_KEYS: &[&str] = &[
+    "DBUS_SESSION_BUS_ADDRESS",
+    "DESKTOP_SESSION",
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "XDG_CURRENT_DESKTOP",
+    "XDG_RUNTIME_DIR",
+    "XDG_SESSION_TYPE",
+];
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct DoctorReport {
+    pub platform: PlatformReport,
+    pub portals: PortalReport,
+    pub accessibility: AccessibilityReport,
+    pub windowing: WindowingReport,
+    pub input: InputReport,
+    pub readiness: ReadinessReport,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct PlatformReport {
+    pub os: String,
+    pub arch: String,
+    pub desktop_session: Option<String>,
+    pub xdg_session_type: Option<String>,
+    pub xdg_current_desktop: Option<String>,
+    pub wayland_display: Option<String>,
+    pub display: Option<String>,
+    pub dbus_session_bus_address: Option<String>,
+    pub xdg_runtime_dir: Option<String>,
+    pub gnome_shell_version: Check,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct PortalReport {
+    pub desktop_portal: Check,
+    pub remote_desktop: Check,
+    pub screencast: Check,
+    pub screenshot: Check,
+    pub input_capture: Check,
+    pub mutter_remote_desktop: Check,
+    pub mutter_screencast: Check,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct AccessibilityReport {
+    pub at_spi_bus: Check,
+    pub toolkit_accessibility: Check,
+    pub at_spi_enabled: Check,
+    pub screen_reader_enabled: Check,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct WindowingReport {
+    pub gnome_shell_introspect: Check,
+    pub codex_gnome_shell_extension: Check,
+    pub can_list_windows: bool,
+    pub can_focus_apps: bool,
+    pub can_focus_windows: bool,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct InputReport {
+    pub ydotool: Check,
+    pub ydotoold: Check,
+    pub ydotool_socket: Check,
+    pub uinput: Check,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ReadinessReport {
+    pub can_register_mcp_tools: bool,
+    pub can_build_accessibility_tree: bool,
+    pub can_query_windows: bool,
+    pub can_focus_apps: bool,
+    pub can_focus_windows: bool,
+    pub can_send_development_input: bool,
+    pub recommended_next_step: String,
+    pub blockers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct SetupReport {
+    pub before: DoctorReport,
+    pub accessibility_command: Check,
+    pub after: DoctorReport,
+    pub changed_accessibility: bool,
+    pub requires_target_app_restart: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct Check {
+    pub ok: bool,
+    pub detail: String,
+}
+
+impl Check {
+    fn ok(detail: impl Into<String>) -> Self {
+        Self {
+            ok: true,
+            detail: detail.into(),
+        }
+    }
+
+    fn fail(detail: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            detail: detail.into(),
+        }
+    }
+}
+
+pub fn doctor_report() -> DoctorReport {
+    hydrate_session_bus_env();
+
+    let platform = platform_report();
+    let portals = portal_report();
+    let accessibility = accessibility_report();
+    let windowing = windowing_report();
+    let input = input_report();
+    let readiness = readiness_report(&accessibility, &windowing, &input);
+
+    DoctorReport {
+        platform,
+        portals,
+        accessibility,
+        windowing,
+        input,
+        readiness,
+    }
+}
+
+pub fn hydrate_session_bus_env() {
+    hydrate_desktop_env_from_process_tree();
+
+    if env_var("XDG_RUNTIME_DIR").is_none() {
+        if let Some(runtime) = xdg_runtime_dir() {
+            if runtime.exists() {
+                env::set_var("XDG_RUNTIME_DIR", runtime);
+            }
+        }
+    }
+
+    if env_var("DBUS_SESSION_BUS_ADDRESS").is_none() {
+        if let Some(runtime) = xdg_runtime_dir() {
+            let bus = runtime.join("bus");
+            if bus.exists() {
+                env::set_var(
+                    "DBUS_SESSION_BUS_ADDRESS",
+                    format!("unix:path={}", bus.display()),
+                );
+            }
+        }
+    }
+}
+
+fn hydrate_desktop_env_from_process_tree() {
+    for process_env in desktop_process_environments() {
+        for key in DESKTOP_ENV_KEYS {
+            if env_var(key).is_some() {
+                continue;
+            }
+            if let Some(value) = process_env
+                .get(*key)
+                .filter(|value| !value.trim().is_empty())
+            {
+                env::set_var(key, value);
+            }
+        }
+
+        if DESKTOP_ENV_KEYS.iter().all(|key| env_var(key).is_some()) {
+            break;
+        }
+    }
+}
+
+fn desktop_process_environments() -> Vec<HashMap<String, String>> {
+    let mut environments = Vec::new();
+    let mut pid = parent_pid("self");
+
+    for _ in 0..8 {
+        let Some(current_pid) = pid else {
+            break;
+        };
+        if current_pid <= 1 {
+            break;
+        }
+
+        if let Some(process_env) = read_process_environ(current_pid) {
+            environments.push(process_env);
+        }
+        pid = parent_pid(&current_pid.to_string());
+    }
+
+    environments
+}
+
+fn parent_pid(pid: &str) -> Option<u32> {
+    let status = fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    parse_parent_pid(&status)
+}
+
+fn parse_parent_pid(status: &str) -> Option<u32> {
+    status.lines().find_map(|line| {
+        let value = line.strip_prefix("PPid:")?.trim();
+        value.parse::<u32>().ok()
+    })
+}
+
+fn read_process_environ(pid: u32) -> Option<HashMap<String, String>> {
+    let bytes = fs::read(format!("/proc/{pid}/environ")).ok()?;
+    Some(parse_environ(&bytes))
+}
+
+fn parse_environ(bytes: &[u8]) -> HashMap<String, String> {
+    bytes
+        .split(|byte| *byte == 0)
+        .filter_map(|entry| {
+            if entry.is_empty() {
+                return None;
+            }
+            let split = entry.iter().position(|byte| *byte == b'=')?;
+            let (key, value) = entry.split_at(split);
+            let value = &value[1..];
+            let key = std::str::from_utf8(key).ok()?.to_string();
+            let value = std::str::from_utf8(value).ok()?.to_string();
+            Some((key, value))
+        })
+        .collect()
+}
+
+pub fn setup_accessibility_report() -> SetupReport {
+    hydrate_session_bus_env();
+
+    let before = doctor_report();
+    let accessibility_command = if can_build_accessibility_tree(&before.accessibility) {
+        Check::ok("GNOME accessibility is already enabled")
+    } else {
+        command_check_with_session_bus(
+            "gsettings",
+            &[
+                "set",
+                "org.gnome.desktop.interface",
+                "toolkit-accessibility",
+                "true",
+            ],
+        )
+    };
+    let after = doctor_report();
+    let before_ready = before.readiness.can_build_accessibility_tree;
+    let after_ready = after.readiness.can_build_accessibility_tree;
+    let changed_accessibility = !before_ready && after_ready;
+    let requires_target_app_restart = changed_accessibility;
+    let message = if after_ready {
+        if changed_accessibility {
+            "GNOME accessibility is enabled. Restart already-running target apps if their AT-SPI tree is still empty."
+        } else {
+            "GNOME accessibility is ready."
+        }
+    } else {
+        "Could not enable GNOME accessibility automatically. Check the accessibility_command detail and enable org.gnome.desktop.interface toolkit-accessibility manually."
+    }
+    .to_string();
+
+    SetupReport {
+        before,
+        accessibility_command,
+        after,
+        changed_accessibility,
+        requires_target_app_restart,
+        message,
+    }
+}
+
+fn platform_report() -> PlatformReport {
+    PlatformReport {
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+        desktop_session: env_var("DESKTOP_SESSION"),
+        xdg_session_type: env_var("XDG_SESSION_TYPE"),
+        xdg_current_desktop: env_var("XDG_CURRENT_DESKTOP"),
+        wayland_display: env_var("WAYLAND_DISPLAY"),
+        display: env_var("DISPLAY"),
+        dbus_session_bus_address: dbus_session_address(),
+        xdg_runtime_dir: xdg_runtime_dir().map(|path| path.display().to_string()),
+        gnome_shell_version: command_check("gnome-shell", &["--version"]),
+    }
+}
+
+fn portal_report() -> PortalReport {
+    PortalReport {
+        desktop_portal: bus_name_check("org.freedesktop.portal.Desktop"),
+        remote_desktop: portal_interface_check("org.freedesktop.portal.RemoteDesktop"),
+        screencast: portal_interface_check("org.freedesktop.portal.ScreenCast"),
+        screenshot: portal_interface_check("org.freedesktop.portal.Screenshot"),
+        input_capture: portal_interface_check("org.freedesktop.portal.InputCapture"),
+        mutter_remote_desktop: bus_name_check("org.gnome.Mutter.RemoteDesktop"),
+        mutter_screencast: bus_name_check("org.gnome.Mutter.ScreenCast"),
+    }
+}
+
+fn accessibility_report() -> AccessibilityReport {
+    AccessibilityReport {
+        at_spi_bus: gdbus_call_check(
+            "org.a11y.Bus",
+            "/org/a11y/bus",
+            "org.a11y.Bus.GetAddress",
+            &[],
+        ),
+        toolkit_accessibility: command_check_with_session_bus(
+            "gsettings",
+            &[
+                "get",
+                "org.gnome.desktop.interface",
+                "toolkit-accessibility",
+            ],
+        ),
+        at_spi_enabled: gdbus_call_check(
+            "org.a11y.Bus",
+            "/org/a11y/bus",
+            "org.freedesktop.DBus.Properties.Get",
+            &["org.a11y.Status", "IsEnabled"],
+        ),
+        screen_reader_enabled: gdbus_call_check(
+            "org.a11y.Bus",
+            "/org/a11y/bus",
+            "org.freedesktop.DBus.Properties.Get",
+            &["org.a11y.Status", "ScreenReaderEnabled"],
+        ),
+    }
+}
+
+fn windowing_report() -> WindowingReport {
+    let gnome_shell_introspect = gdbus_call_check(
+        "org.gnome.Shell",
+        "/org/gnome/Shell/Introspect",
+        "org.gnome.Shell.Introspect.GetWindows",
+        &[],
+    );
+    let codex_gnome_shell_extension = gdbus_call_check(
+        "com.openai.Codex.WindowControl",
+        "/com/openai/Codex/WindowControl",
+        "com.openai.Codex.WindowControl.ListWindows",
+        &[],
+    );
+    let can_list_windows = gnome_shell_introspect.ok || codex_gnome_shell_extension.ok;
+    let can_focus_apps = gdbus_introspect_contains(
+        "org.gnome.Shell",
+        "/org/gnome/Shell",
+        "org.gnome.Shell",
+        "FocusApp",
+    )
+    .ok;
+    let can_focus_windows = codex_gnome_shell_extension.ok;
+    let note = if can_list_windows {
+        "A GNOME window listing backend is available for list_windows, focused_window, and targeted input verification."
+    } else {
+        "GNOME window listing is unavailable or denied. Computer Use can still use screenshots, AT-SPI, and global ydotool input, but targeted window input cannot be verified. Run setup_window_targeting to install the optional GNOME Shell extension backend."
+    }
+    .to_string();
+
+    WindowingReport {
+        gnome_shell_introspect,
+        codex_gnome_shell_extension,
+        can_list_windows,
+        can_focus_apps,
+        can_focus_windows,
+        note,
+    }
+}
+
+fn input_report() -> InputReport {
+    let socket = ydotool_socket_path();
+    InputReport {
+        ydotool: command_path_check("ydotool"),
+        ydotoold: process_check("ydotoold"),
+        ydotool_socket: path_check(&socket),
+        uinput: path_check(Path::new("/dev/uinput")),
+    }
+}
+
+fn readiness_report(
+    accessibility: &AccessibilityReport,
+    windowing: &WindowingReport,
+    input: &InputReport,
+) -> ReadinessReport {
+    let mut blockers = Vec::new();
+    let can_build_accessibility_tree = can_build_accessibility_tree(accessibility);
+    let can_query_windows = windowing.can_list_windows;
+    let can_focus_apps = windowing.can_focus_apps;
+    let can_focus_windows = windowing.can_focus_windows;
+    let can_send_development_input =
+        input.ydotool.ok && input.ydotoold.ok && input.ydotool_socket.ok && input.uinput.ok;
+
+    if !can_build_accessibility_tree {
+        blockers.push(
+            "GNOME accessibility is disabled; enable org.gnome.desktop.interface toolkit-accessibility for AT-SPI tree extraction."
+                .to_string(),
+        );
+    }
+
+    if !can_query_windows {
+        blockers.push(
+            "GNOME Shell window introspection is unavailable; targeted window focus and verification will be disabled."
+                .to_string(),
+        );
+    }
+
+    if can_query_windows && !can_focus_windows {
+        blockers.push(
+            "Exact GNOME Shell window activation is unavailable; app-level focus may work, but window_id/title/terminal-targeted input cannot be verified."
+                .to_string(),
+        );
+    }
+
+    if !can_send_development_input {
+        blockers.push(
+            "Development input fallback is not fully available; ydotool, ydotoold, socket, and /dev/uinput are required."
+                .to_string(),
+        );
+    }
+
+    let recommended_next_step = if !can_build_accessibility_tree {
+        "Run setup_accessibility to enable GNOME accessibility before element-aware actions."
+            .to_string()
+    } else if !can_query_windows {
+        "Run setup_window_targeting to install the Codex GNOME Shell extension backend, or enable GNOME Shell window introspection before using targeted keyboard input.".to_string()
+    } else if !can_focus_windows {
+        "Run setup_window_targeting to install the Codex GNOME Shell extension backend before using exact window_id, title, or terminal-targeted input.".to_string()
+    } else if !can_send_development_input {
+        "Install and start ydotoold if development input fallback is needed.".to_string()
+    } else {
+        "Computer Use is ready: AT-SPI tree support, GNOME window targeting, and ydotool input fallback are available."
+            .to_string()
+    };
+
+    ReadinessReport {
+        can_register_mcp_tools: true,
+        can_build_accessibility_tree,
+        can_query_windows,
+        can_focus_apps,
+        can_focus_windows,
+        can_send_development_input,
+        recommended_next_step,
+        blockers,
+    }
+}
+
+fn can_build_accessibility_tree(accessibility: &AccessibilityReport) -> bool {
+    accessibility.at_spi_bus.ok
+        && (check_detail_contains_true(&accessibility.at_spi_enabled)
+            || check_detail_contains_true(&accessibility.toolkit_accessibility))
+}
+
+fn check_detail_contains_true(check: &Check) -> bool {
+    check.ok && check.detail.to_ascii_lowercase().contains("true")
+}
+
+fn env_var(key: &str) -> Option<String> {
+    env::var(key).ok().filter(|value| !value.trim().is_empty())
+}
+
+fn xdg_runtime_dir() -> Option<PathBuf> {
+    if let Some(value) = env_var("XDG_RUNTIME_DIR") {
+        return Some(PathBuf::from(value));
+    }
+    user_id().map(|uid| PathBuf::from(format!("/run/user/{uid}")))
+}
+
+fn dbus_session_address() -> Option<String> {
+    if let Some(value) = env_var("DBUS_SESSION_BUS_ADDRESS") {
+        return Some(value);
+    }
+    xdg_runtime_dir()
+        .map(|runtime| format!("unix:path={}", runtime.join("bus").display()))
+        .filter(|address| {
+            address
+                .strip_prefix("unix:path=")
+                .is_some_and(|p| Path::new(p).exists())
+        })
+}
+
+fn ydotool_socket_path() -> PathBuf {
+    if let Some(value) = env_var("YDOTOOL_SOCKET") {
+        return PathBuf::from(value);
+    }
+
+    let runtime_socket = xdg_runtime_dir().map(|runtime| runtime.join(".ydotool_socket"));
+    let tmp_socket = PathBuf::from("/tmp/.ydotool_socket");
+
+    for candidate in [runtime_socket.as_ref(), Some(&tmp_socket)]
+        .into_iter()
+        .flatten()
+    {
+        if candidate.exists() {
+            return candidate.to_path_buf();
+        }
+    }
+
+    runtime_socket.unwrap_or(tmp_socket)
+}
+
+fn user_id() -> Option<String> {
+    let output = Command::new("id").arg("-u").output().ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn command_path_check(command: &str) -> Check {
+    command_check("sh", &["-c", &format!("command -v {command}")])
+}
+
+fn process_check(process_name: &str) -> Check {
+    command_check("pgrep", &["-a", process_name])
+}
+
+fn path_check(path: &Path) -> Check {
+    if path.exists() {
+        Check::ok(path.display().to_string())
+    } else {
+        Check::fail(format!("missing: {}", path.display()))
+    }
+}
+
+fn bus_name_check(name: &str) -> Check {
+    command_check_with_session_bus("busctl", &["--user", "status", name])
+}
+
+fn portal_interface_check(interface: &str) -> Check {
+    command_check_with_session_bus(
+        "busctl",
+        &[
+            "--user",
+            "introspect",
+            "org.freedesktop.portal.Desktop",
+            "/org/freedesktop/portal/desktop",
+            interface,
+        ],
+    )
+}
+
+fn gdbus_call_check(destination: &str, object_path: &str, method: &str, args: &[&str]) -> Check {
+    let mut command_args = vec![
+        "call",
+        "--session",
+        "--dest",
+        destination,
+        "--object-path",
+        object_path,
+        "--method",
+        method,
+    ];
+    command_args.extend_from_slice(args);
+    command_check_with_session_bus("gdbus", &command_args)
+}
+
+fn gdbus_introspect_contains(
+    destination: &str,
+    object_path: &str,
+    interface: &str,
+    member: &str,
+) -> Check {
+    let check = command_check_with_session_bus(
+        "gdbus",
+        &[
+            "introspect",
+            "--session",
+            "--dest",
+            destination,
+            "--object-path",
+            object_path,
+        ],
+    );
+    if !check.ok {
+        return check;
+    }
+
+    if check.detail.contains(interface) && check.detail.contains(member) {
+        Check::ok(format!("{interface}.{member} is available"))
+    } else {
+        Check::fail(format!("{interface}.{member} was not advertised"))
+    }
+}
+
+fn command_check(command: &str, args: &[&str]) -> Check {
+    run_command(command, args, false)
+}
+
+fn command_check_with_session_bus(command: &str, args: &[&str]) -> Check {
+    run_command(command, args, true)
+}
+
+fn run_command(command: &str, args: &[&str], with_session_bus: bool) -> Check {
+    let mut cmd = Command::new(command);
+    cmd.args(args);
+
+    if with_session_bus {
+        if let Some(address) = dbus_session_address() {
+            cmd.env("DBUS_SESSION_BUS_ADDRESS", address);
+        }
+        if let Some(runtime) = xdg_runtime_dir() {
+            cmd.env("XDG_RUNTIME_DIR", runtime);
+        }
+    }
+
+    match cmd.output() {
+        Ok(output) if output.status.success() => {
+            let detail = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            Check::ok(if detail.is_empty() {
+                "ok".into()
+            } else {
+                detail
+            })
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let detail = if !stderr.is_empty() { stderr } else { stdout };
+            Check::fail(if detail.is_empty() {
+                format!("exit status {}", output.status)
+            } else {
+                detail
+            })
+        }
+        Err(error) => Check::fail(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn accessibility_report(
+        at_spi_bus: Check,
+        toolkit_accessibility: Check,
+    ) -> AccessibilityReport {
+        AccessibilityReport {
+            at_spi_bus,
+            toolkit_accessibility,
+            at_spi_enabled: Check::fail("(<false>,)"),
+            screen_reader_enabled: Check::fail("(<false>,)"),
+        }
+    }
+
+    fn windowing_report(can_list_windows: bool, can_focus_windows: bool) -> WindowingReport {
+        WindowingReport {
+            gnome_shell_introspect: if can_list_windows {
+                Check::ok("ok")
+            } else {
+                Check::fail("denied")
+            },
+            codex_gnome_shell_extension: if can_focus_windows {
+                Check::ok("ok")
+            } else {
+                Check::fail("missing")
+            },
+            can_list_windows,
+            can_focus_apps: true,
+            can_focus_windows,
+            note: String::new(),
+        }
+    }
+
+    fn input_report(can_send_input: bool) -> InputReport {
+        let check = if can_send_input {
+            Check::ok("ok")
+        } else {
+            Check::fail("missing")
+        };
+        InputReport {
+            ydotool: check.clone(),
+            ydotoold: check.clone(),
+            ydotool_socket: check.clone(),
+            uinput: check,
+        }
+    }
+
+    #[test]
+    fn accessibility_tree_requires_reachable_at_spi_bus() {
+        let report = accessibility_report(Check::fail("permission denied"), Check::ok("true"));
+
+        assert!(!can_build_accessibility_tree(&report));
+    }
+
+    #[test]
+    fn accessibility_tree_is_ready_when_bus_and_toolkit_are_ready() {
+        let report = accessibility_report(
+            Check::ok("('unix:path=/run/user/1000/at-spi/bus',)"),
+            Check::ok("true"),
+        );
+
+        assert!(can_build_accessibility_tree(&report));
+    }
+
+    #[test]
+    fn parses_parent_pid_from_proc_status() {
+        let status = "Name:\ttest\nPid:\t42\nPPid:\t7\n";
+
+        assert_eq!(parse_parent_pid(status), Some(7));
+    }
+
+    #[test]
+    fn parses_nul_separated_process_environment() {
+        let environment = parse_environ(
+            b"DISPLAY=:0\0WAYLAND_DISPLAY=wayland-0\0EMPTY=\0NO_EQUALS\0XDG_SESSION_TYPE=wayland\0",
+        );
+
+        assert_eq!(environment.get("DISPLAY").map(String::as_str), Some(":0"));
+        assert_eq!(
+            environment.get("WAYLAND_DISPLAY").map(String::as_str),
+            Some("wayland-0")
+        );
+        assert_eq!(environment.get("EMPTY").map(String::as_str), Some(""));
+        assert!(!environment.contains_key("NO_EQUALS"));
+    }
+
+    #[test]
+    fn readiness_requires_exact_window_focus_for_targeted_input() {
+        let accessibility = accessibility_report(Check::ok("bus"), Check::ok("true"));
+        let windowing = windowing_report(true, false);
+        let input = input_report(true);
+
+        let readiness = readiness_report(&accessibility, &windowing, &input);
+
+        assert!(readiness.can_query_windows);
+        assert!(!readiness.can_focus_windows);
+        assert!(readiness
+            .recommended_next_step
+            .contains("setup_window_targeting"));
+        assert!(readiness
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("Exact GNOME Shell window activation")));
+    }
+
+    #[test]
+    fn readiness_message_stays_within_pr1_scope() {
+        let accessibility = accessibility_report(Check::ok("bus"), Check::ok("true"));
+        let windowing = windowing_report(true, true);
+        let input = input_report(true);
+
+        let readiness = readiness_report(&accessibility, &windowing, &input);
+
+        assert!(readiness.blockers.is_empty());
+        assert!(readiness
+            .recommended_next_step
+            .contains("AT-SPI tree support"));
+        assert!(!readiness.recommended_next_step.contains("action/value"));
+    }
+}

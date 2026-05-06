@@ -3,6 +3,115 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+## [0.7.0] - 2026-05-04
+
+### Added
+
+- Linux Computer Use plugin now exposes accessibility actions and editable-value setting via a new `perform_action` MCP tool. `element_index` selections resolve back to cached AT-SPI object references so actions and value writes target the same node as a click.
+- UI-driven Linux app update flow: when an update is rebuilt and ready, the in-app updater control can request install. The app exits, the user service installs the package, and the launcher relaunches `/usr/bin/codex-desktop` after the update lands. Backed by a new `codex-update-manager install-ready` subcommand and a `scripts/rebuild-candidate.sh` helper packaged into the update-builder bundle.
+- NixOS launcher exposes Electron GL/EGL libraries and primary-runtime native libraries via `LD_LIBRARY_PATH`, so the bundled Python/Node payloads (Pillow, NumPy, sharp, canvas) load on stock NixOS.
+- The installer now bundles a managed Linux Node.js 22.22 runtime into `codex-app/resources/node-runtime`; packaged launches and local auto-update rebuilds use it before any system, nvm, asdf, or manually installed Node.js.
+
+### Changed
+
+- `get_app_state(window_id=...)` and `get_app_state(pid=...)` prefer exact PID/window-root matching when resolving the AT-SPI tree.
+- `click(element_index=...)` falls back to the primary AT-SPI action when the element exposes no usable bounds.
+- `app.asar` repack is now reproducible: file ordering is sorted and `node-pty/build/Makefile` (which embeds absolute build paths) is removed before packing.
+- Native packages no longer hard-depend on distro `nodejs`/`npm`; the bundled managed Node.js runtime covers Codex CLI install/update flows, Browser Use, and updater rebuilds. This lets users with `nvm`, asdf, Volta, or nodejs.org tarball installs install the native package cleanly. Fixes #104.
+
+### Fixed
+
+- AT-SPI sentinel bounds no longer trigger bogus portal clicks on hidden or off-screen nodes.
+- Linux quit now bypasses the close-to-tray gate so the app actually exits instead of getting trapped in the tray.
+- Keybinds settings index patch tolerates upstream minified variable-name drift; the route map is detected via a `(0,X.lazy)` lookahead instead of hard-coded `c_e` / `Xge` / `Zge` names.
+- NixOS-installed `start.sh` shebang is patched to a nix-store `bash` so the launcher actually runs on systems without `/bin/bash`.
+- Native packages now always stage `scripts/lib/node-runtime.sh` into `/opt/codex-desktop/update-builder`, so local auto-update rebuilds can source the managed Node runtime helper instead of failing before package generation.
+
+## [0.6.2] - 2026-05-01
+
+### Changed
+
+- Missing Codex CLI recovery is now exposed as an explicit `cli_status: NotInstalled` state in updater status output and persisted state, instead of overloading `Unknown`.
+- Automatic installation of a missing Codex CLI is now documented and enforced as launcher-scoped behavior; the daemon and `codex-update-manager status` only report and notify when the dependency is missing.
+- The Computer Use in-app UI surface is now opt-in. The MCP backend still registers by default; the UI controls are enabled when the user sets `CODEX_LINUX_ENABLE_COMPUTER_USE_UI=1` at build time, or persists `"codex-linux-computer-use-ui-enabled": true` in `~/.config/codex-desktop/settings.json` (also honoured by the `codex-update-manager` user service across rebuilds). Existing users who relied on the UI being on by default need to set one of these once.
+
+### Added
+
+- New `isComputerUseUiEnabled()` helper in `scripts/patch-linux-window-ui.js` that reads both the env var and the persisted settings flag.
+- Smoke test `test_linux_computer_use_ui_opt_in_smoke` covering all three branches (default off, env-var on, settings-flag on).
+
+### Fixed
+
+- Launcher error messages now distinguish between a CLI that is missing versus an automatic installation attempt that failed, clarifying the supported recovery path.
+- Missing-CLI desktop notifications now key off the explicit `NotInstalled` state instead of inferring absence from cleared fields.
+
+## [0.6.1] - 2026-04-30
+
+### Added
+
+- New GitHub Actions workflow `upstream-build-app.yml` that builds `make build-app` against the real upstream `Codex.dmg`, caches the DMG between runs when upstream metadata is unchanged, and records the tested DMG URL, `Last-Modified`, `ETag`, `Content-Length`, `SHA-256`, size, and test timestamp in the job summary plus an uploaded JSON artifact.
+
+### Changed
+
+- Script smoke tests now assert that the upstream-DMG CI workflow continues to track DMG provenance and cache behavior, reducing the chance that future CI edits silently drop reproducibility metadata for upstream build validation.
+
+## [0.6.0] - 2026-04-30
+
+### Added
+
+- Packaged GUI launches can now prompt to install a missing Codex CLI through `codex-update-manager`, preferring `kdialog` on KDE/Plasma, then `zenity`, and finally an actionable desktop notification when no dialog helper is available.
+- `scripts/install-deps.sh` now installs one desktop-appropriate GUI dialog helper so first-run CLI installation works cleanly outside a terminal.
+- GitHub Actions CI now runs Rust checks, script smoke tests, and real Debian, RPM, and pacman package build validations with job summaries.
+
+### Changed
+
+- `make build-app` now defers to `install.sh` when no `DMG=...` override is provided, so fresh checkouts can reuse or download `Codex.dmg` through the installer's normal flow instead of failing on a missing local cache path.
+- Electron runtime downloads are now cached under `~/.cache/codex-desktop/electron` and resume interrupted transfers, reducing repeated `make build-app` rebuild time.
+- Launcher CLI preflight now uses cached local CLI state on the fast path, leaving heavier `codex --version` and registry refresh work to the updater when the cache is stale or invalid.
+
+### Fixed
+
+- `make build-app` now rebuilds `better-sqlite3` with an Electron 41-compatible release when the upstream DMG bundles an older native module source.
+- `codex-update-manager` now refreshes CLI status when the daemon starts and shows a desktop notification if the Codex CLI is missing, so package installs do not rely on the user manually checking updater state to understand why Codex Desktop cannot launch cleanly.
+- When the Codex CLI is missing, terminal launches still prompt before installation and GUI launches now have a matching fallback path instead of failing with only a passive notification.
+
+
+## [0.5.0] - 2026-04-30
+
+### Added
+
+- Linux Computer Use plugin and native Rust MCP backend `codex-computer-use-linux`. Provides AT-SPI accessibility-tree access, screenshot capture through GNOME Shell or XDG Desktop Portal, and `ydotool` input synthesis. Plugin is gated by OpenAI's per-account Statsig rollout (`computerUse` feature flag) — installing the package does not by itself make Computer Use appear in the Codex UI.
+- Linux keybinds settings page injected into the Codex webview, with persistent toggles for the compact prompt window, system tray, and warm-start handoff.
+- Warm-start handoff: launching the app while another instance is already running now sends the launch action over a Unix-domain socket (`launch-action.sock`) and exits, instead of starting a fresh Electron. New launcher CLI flags `--new-chat`, `--quick-chat`, `--prompt-chat`, `--hotkey-window` route through that path.
+- Linux system tray with platform-gated guard, single-instance lock, and second-instance window focus through Electron's `requestSingleInstanceLock` / `second-instance` event.
+- Polkit policy `com.github.ilysenko.codex-desktop-linux.update.policy` so privileged updater installs use the desktop authentication agent (`pkexec --disable-internal-agent`) instead of falling back to a textual prompt.
+- openSUSE / zypper support across `scripts/install-deps.sh`, the `make install` target, and the updater's RPM install path.
+- Browser Use bundled plugin resources are now installed alongside the Linux app, with launcher-side environment hydration for `CODEX_ELECTRON_RESOURCES_PATH`, `CODEX_BROWSER_USE_NODE_PATH`, and `CODEX_NODE_REPL_PATH`.
+- Apt Node bootstrap: `install-deps.sh` prefers a compatible distro `nodejs`/`npm` candidate and otherwise installs Node.js 22 from NodeSource. CI matrix validates the bootstrap on Ubuntu 22.04, Ubuntu 24.04, and Debian 12.
+- Electron version is now auto-detected from upstream DMG metadata (`Electron Framework.framework/Versions/A/Resources/Info.plist` then `app.asar` `package.json`); the pinned `41.3.0` remains as the fallback when detection fails.
+- `codex-update-manager check-now --if-stale` subcommand and a launch-time best-effort check that skips when the last successful upstream check is still fresh.
+- New updater subcommand `prompt-install-cli` plus persisted-state field `cli_last_verified_at` to support GUI-launched CLI install prompts and a cached-status fast path.
+
+### Changed
+
+- ASAR patcher refactored into independent fail-soft patch functions with regex-driven needles instead of hard-coded minified variable names. Added Node test suite (`scripts/patch-linux-window-ui.test.js`).
+- DEB / RPM / pacman packages now declare `nodejs (>= 20)` and pull in `polkit` (or `policykit-1` on older Debian/Ubuntu) plus `pkexec`, so the privileged install flow works out of the box on every supported distro.
+- Wayland sessions with `DISPLAY` available now default to `--ozone-platform=x11` for Electron popup positioning compatibility; pure Wayland sessions keep `--ozone-platform-hint=auto`.
+- RPM `%preun` only stops and disables the user updater service on package erase (`$1 -eq 0`), not on upgrade. Prevents the long-standing footgun where every upgrade left the updater service stopped until the next user login.
+- RPM staging now uses the shared `stage_common_package_files` / `stage_update_builder_bundle` helpers, fixing missing `.codex-linux/codex-packaged-runtime.sh` and an incomplete `update-builder/` payload in shipped RPMs.
+- Updater check serialization moved to a kernel-backed file lock (`flock(2)` via the `fs4` crate). A non-graceful exit no longer leaves a stale sentinel file that silences future upstream checks.
+- Webview server is now adopted and reused across launches instead of `pkill`-and-restart, and explicitly binds to `127.0.0.1` only.
+
+### Fixed
+
+- Failed `pkexec` authentication (exit code `126` or `127`) now keeps the candidate `ReadyToInstall` for retry on the next app exit, instead of marking the candidate permanently `Failed` and surfacing repeat prompts every reconcile cycle.
+- RPM installs now reject non-newer package versions, matching the existing DEB and pacman downgrade guards.
+- Linux browser annotation screenshots now use the stored anchor geometry and render only the selected marker, fixing misaligned and over-cluttered annotation captures.
+- The Linux settings persistence patch now warns and skips instead of throwing when its needle is missing on a fresh upstream bundle, so the install pipeline no longer aborts on a bundle-shape change.
+- DEB packages now alternate-depend on `pkexec | policykit-1` and `polkitd | policykit-1`, so installs succeed on Ubuntu 22.04 and Mint 21.x where the polkit binaries still ship inside `policykit-1`.
+
 ## [0.4.2] - 2026-04-23
 
 ### Changed
