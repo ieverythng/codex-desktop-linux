@@ -38,6 +38,19 @@ Existing `nvm`, asdf, Volta, NodeSource, or nodejs.org tarball installs are stil
 
 The Codex CLI is still required at runtime, but the first launch can install or update `@openai/codex` automatically using the bundled managed `npm`. You can also pre-install and manage the CLI yourself if you prefer.
 
+On some systems (e.g. hardened Linux setups), `/tmp` may be mounted with `noexec`, preventing the rust installer and bundled Node.js runtime from executing.
+
+Workaround:
+
+```bash
+mkdir -p ~/tmp/codex-work ~/tmp/codex-cache
+
+export TMPDIR=~/tmp/codex-work
+export XDG_CACHE_HOME=~/tmp/codex-cache
+
+# run install steps in this shell
+```
+
 ## Quick install
 
 The fastest path: install deps, build the local app, build the native package, install it.
@@ -413,7 +426,7 @@ pacman -Qlp dist/codex-desktop-*.pkg.tar.zst | sed -n '1,40p'
 
 ## Versioning
 
-`codex-update-manager` current crate version: `0.7.0`
+`codex-update-manager` current crate version: `0.7.1`
 
 SemVer policy:
 
