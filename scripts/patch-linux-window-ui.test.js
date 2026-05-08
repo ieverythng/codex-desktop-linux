@@ -283,6 +283,7 @@ test("adds Linux tray support including the platform guard", () => {
     patched,
     /\(E\|\|process\.platform===`linux`&&\(typeof codexLinuxIsTrayEnabled!==`function`\|\|codexLinuxIsTrayEnabled\(\)\)\)&&oe\(\);/,
   );
+  assert.doesNotMatch(patched, /process\.platform===`linux`&&codexLinuxIsTrayEnabled\(\)/);
 });
 
 test("adds Linux tray support for current minified window and startup identifiers", () => {

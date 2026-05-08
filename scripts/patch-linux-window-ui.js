@@ -1045,12 +1045,11 @@ function applyLinuxTrayPatch(currentSource, iconPathExpression) {
 
   const trayStartupNeedle = "E&&oe();";
   const previousTrayStartupPatch = "(E||process.platform===`linux`)&&oe();";
-  const linuxTrayEnabledExpr =
-    "process.platform===`linux`&&(typeof codexLinuxIsTrayEnabled!==`function`||codexLinuxIsTrayEnabled())";
-  const trayStartupPatch = `(E||${linuxTrayEnabledExpr})&&oe();`;
+  const trayEnabledExpression = "process.platform===`linux`&&(typeof codexLinuxIsTrayEnabled!==`function`||codexLinuxIsTrayEnabled())";
+  const trayStartupPatch = `(E||${trayEnabledExpression})&&oe();`;
   patchedSource = patchedSource.replaceAll(
     "process.platform===`linux`&&codexLinuxIsTrayEnabled())&&",
-    `${linuxTrayEnabledExpr})&&`,
+    `${trayEnabledExpression})&&`,
   );
   if (patchedSource.includes(trayStartupPatch)) {
     // Already patched.
@@ -1065,12 +1064,12 @@ function applyLinuxTrayPatch(currentSource, iconPathExpression) {
       : findDynamicTrayStartupCall(patchedSource, traySetup.setupFn, traySetup.index);
     if (
       traySetup != null &&
-      patchedSource.includes(`${linuxTrayEnabledExpr})&&${traySetup.setupFn}();`)
+      patchedSource.includes(`${trayEnabledExpression})&&${traySetup.setupFn}();`)
     ) {
       // Already patched with a newer minifier's tray setup identifier.
     } else if (dynamicTrayStartupMatch != null) {
       const isWindowsVar = dynamicTrayStartupMatch[1];
-      patchedSource = `${patchedSource.slice(0, dynamicTrayStartupMatch.index)}(${isWindowsVar}||${linuxTrayEnabledExpr})&&${traySetup.setupFn}();${patchedSource.slice(dynamicTrayStartupMatch.index + dynamicTrayStartupMatch[0].length)}`;
+      patchedSource = `${patchedSource.slice(0, dynamicTrayStartupMatch.index)}(${isWindowsVar}||${trayEnabledExpression})&&${traySetup.setupFn}();${patchedSource.slice(dynamicTrayStartupMatch.index + dynamicTrayStartupMatch[0].length)}`;
     } else {
       console.warn("WARN: Could not find tray startup call — skipping Linux tray startup patch");
     }
@@ -1132,8 +1131,8 @@ function parseDestructuredParamAliases(paramsText) {
   return aliases;
 }
 
-function buildComputerUseGate({ gateKey, nameExpr, featuresVar, platformVar, migrateVar }) {
-  return `{installWhenMissing:!0,name:${nameExpr},${gateKey}:({features:${featuresVar},platform:${platformVar}})=>(${platformVar}===\`darwin\`||${platformVar}===\`linux\`)&&${featuresVar}.computerUse,migrate:${migrateVar}}`;
+function buildComputerUseGate({ nameExpr, availabilityProp, featuresVar, platformVar, migrateVar }) {
+  return `{installWhenMissing:!0,name:${nameExpr},${availabilityProp}:({features:${featuresVar},platform:${platformVar}})=>(${platformVar}===\`darwin\`||${platformVar}===\`linux\`)&&${featuresVar}.computerUse,migrate:${migrateVar}}`;
 }
 
 function hasComputerUseLiteral(source) {
@@ -1156,7 +1155,7 @@ function applyLinuxComputerUsePluginGatePatch(currentSource) {
   let sawUnpatchableGate = false;
   let match;
   while ((match = gateRegex.exec(currentSource)) != null) {
-    const [gateSource, installWhenMissing, nameExpr, gateKey, paramsText, expression, migrateVar] = match;
+    const [gateSource, installWhenMissing, nameExpr, availabilityProp, paramsText, expression, migrateVar] = match;
     if (!isComputerUseNameExpr(nameExpr, computerUseNameVar)) {
       continue;
     }
@@ -1175,7 +1174,7 @@ function applyLinuxComputerUsePluginGatePatch(currentSource) {
       continue;
     }
     if (expression === darwinOnlyExpression || expression === linuxExpression) {
-      const replacement = buildComputerUseGate({ gateKey, nameExpr, featuresVar, platformVar, migrateVar });
+      const replacement = buildComputerUseGate({ nameExpr, availabilityProp, featuresVar, platformVar, migrateVar });
       return `${currentSource.slice(0, match.index)}${replacement}${currentSource.slice(match.index + gateSource.length)}`;
     }
     sawUnpatchableGate = true;
