@@ -265,6 +265,12 @@ NODE
               --unpack "{*.node,*.so,*.dylib}"
             rm -rf "$resources_dir/app-extracted"
 
+            if [ -f "$resources_dir/node_repl" ]; then
+              patchelf --set-interpreter "$(cat ${pkgs.stdenv.cc}/nix-support/dynamic-linker)" \
+                --set-rpath "${pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib pkgs.glibc ]}" \
+                "$resources_dir/node_repl"
+            fi
+
             ${patchNixInstalledApp "$out/opt/codex-desktop"}
 
             install -Dm0644 "$out/opt/codex-desktop/.codex-linux/codex-desktop.png" \
