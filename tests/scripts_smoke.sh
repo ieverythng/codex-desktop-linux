@@ -425,6 +425,9 @@ test_launcher_template_sanity() {
     assert_contains "$REPO_DIR/install.sh" "inspect_rebuild_candidate"
     assert_contains "$REPO_DIR/scripts/lib/install-helpers.sh" "--inspect"
     assert_contains "$REPO_DIR/scripts/lib/install-helpers.sh" "--report-dir"
+    assert_contains "$REPO_DIR/scripts/lib/install-helpers.sh" 'command -v 7z'
+    assert_contains "$REPO_DIR/scripts/lib/install-helpers.sh" 'command -v 7zz'
+    assert_contains "$REPO_DIR/scripts/lib/install-helpers.sh" 'missing+=("7z/7zz")'
     assert_contains "$REPO_DIR/scripts/lib/asar-patch.sh" "CODEX_PATCH_REPORT_JSON"
     assert_contains "$REPO_DIR/scripts/lib/rebuild-report.sh" "write_rebuild_report_json"
     assert_contains "$REPO_DIR/install.sh" "MIN_BETTER_SQLITE3_VERSION_FOR_ELECTRON_41=\"12.9.0\""
@@ -506,6 +509,7 @@ PY
     assert_contains "$REPO_DIR/launcher/start.sh.template" "wait_for_webview_server"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "verify_webview_origin"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "Webview origin verified."
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "unset ELECTRON_RUN_AS_NODE"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "hydrate_graphical_session_env"
     assert_not_contains "$REPO_DIR/install.sh" "pkill -f \"http.server 5175\""
     assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_WEBVIEW_PORT"

@@ -1134,6 +1134,7 @@ cleanup_launcher() {
 launch_electron() {
     cd "$SCRIPT_DIR"
     log_phase "electron_launch"
+    unset ELECTRON_RUN_AS_NODE
 
     set_electron_defaults "$@"
     build_electron_launch_args
