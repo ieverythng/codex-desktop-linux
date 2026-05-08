@@ -9,13 +9,18 @@ use chrono::{Duration, Utc};
 use std::{
     ffi::OsString,
     fs,
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Command, Output},
 };
 use tracing::{info, warn};
 
 const CLI_PACKAGE_NAME: &str = "@openai/codex";
+const CLI_NOT_INSTALLED_MESSAGE: &str =
+    "Codex CLI is required but not currently installed. Open the app to retry the automatic install flow, or install it manually with npm.";
 const CLI_VERSION_CHECK_TTL: Duration = Duration::hours(1);
+#[cfg(test)]
+const CLI_INSTALLED_VERSION_TTL: Duration = Duration::hours(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreflightOutcome {
@@ -41,6 +46,7 @@ pub fn preflight(
     let installed_version = read_installed_version(&cli_path)?;
     state.cli_path = Some(cli_path.clone());
     state.cli_installed_version = Some(installed_version.clone());
+    state.cli_last_verified_at = Some(Utc::now());
     persist_state(paths, state)?;
 
     if should_skip_latest_version_check(
@@ -74,8 +80,7 @@ pub fn preflight(
             state.cli_status = CliStatus::Unknown;
             state.cli_latest_version = None;
             state.cli_error_message = Some(format!(
-                "Could not check the latest {} version: {error}",
-                CLI_PACKAGE_NAME
+                "Could not check the latest {CLI_PACKAGE_NAME} version: {error}"
             ));
             persist_state(paths, state)?;
             warn!(?error, "unable to check latest Codex CLI version");
@@ -121,8 +126,7 @@ pub fn preflight(
 
     if refreshed_version != latest_version {
         let message = format!(
-            "Codex CLI upgrade finished but the installed version is still {} instead of {}",
-            refreshed_version, latest_version
+            "Codex CLI upgrade finished but the installed version is still {refreshed_version} instead of {latest_version}"
         );
         state.cli_status = CliStatus::Failed;
         state.cli_error_message = Some(message.clone());
@@ -141,16 +145,36 @@ pub fn preflight(
     })
 }
 
+#[cfg(test)]
+pub fn refresh_cached_status(state: &mut PersistedState, paths: &RuntimePaths) -> Result<()> {
+    let original_state = state.clone();
+    let requested_path = requested_cli_path(state);
+    let cli_path = match resolve_cli_path(requested_path.as_deref()) {
+        Some(path) => path,
+        None => {
+            mark_cli_missing(state);
+            return persist_if_changed(paths, state, &original_state);
+        }
+    };
+
+    let Some(installed_version) = cached_installed_version_if_fresh(state, &cli_path) else {
+        return refresh_status(state, paths);
+    };
+
+    state.cli_path = Some(cli_path);
+    state.cli_installed_version = Some(installed_version.clone());
+    refresh_cli_status_from_latest(state, &installed_version);
+    state.cli_error_message = None;
+
+    persist_if_changed(paths, state, &original_state)
+}
+
 pub fn refresh_status(state: &mut PersistedState, paths: &RuntimePaths) -> Result<()> {
     let requested_path = requested_cli_path(state);
     let cli_path = match resolve_cli_path(requested_path.as_deref()) {
         Some(path) => path,
         None => {
-            state.cli_path = None;
-            state.cli_installed_version = None;
-            state.cli_status = CliStatus::Unknown;
-            state.cli_error_message =
-                Some("Codex CLI not found in PATH or known install locations".to_string());
+            mark_cli_missing(state);
             persist_state(paths, state)?;
             return Ok(());
         }
@@ -162,10 +186,10 @@ pub fn refresh_status(state: &mut PersistedState, paths: &RuntimePaths) -> Resul
         Err(error) => {
             state.cli_path = Some(cli_path);
             state.cli_installed_version = None;
+            state.cli_last_verified_at = None;
             state.cli_status = CliStatus::Failed;
             state.cli_error_message = Some(format!(
-                "Could not read the installed {} version: {error}",
-                CLI_PACKAGE_NAME
+                "Could not read the installed {CLI_PACKAGE_NAME} version: {error}"
             ));
             persist_state(paths, state)?;
             warn!(?error, "unable to read installed Codex CLI version");
@@ -175,6 +199,7 @@ pub fn refresh_status(state: &mut PersistedState, paths: &RuntimePaths) -> Resul
 
     state.cli_path = Some(cli_path);
     state.cli_installed_version = Some(installed_version.clone());
+    state.cli_last_verified_at = Some(Utc::now());
 
     if should_skip_latest_version_check(
         state,
@@ -214,8 +239,7 @@ pub fn refresh_status(state: &mut PersistedState, paths: &RuntimePaths) -> Resul
                 state.cli_status = CliStatus::Unknown;
             }
             state.cli_error_message = Some(format!(
-                "Could not check the latest {} version: {error}",
-                CLI_PACKAGE_NAME
+                "Could not check the latest {CLI_PACKAGE_NAME} version: {error}"
             ));
             warn!(?error, "unable to check latest Codex CLI version");
         }
@@ -224,11 +248,34 @@ pub fn refresh_status(state: &mut PersistedState, paths: &RuntimePaths) -> Resul
     persist_state(paths, state)
 }
 
+pub fn reconcile_if_present(state: &mut PersistedState, paths: &RuntimePaths) -> Result<bool> {
+    let requested_path = requested_cli_path(state);
+    if resolve_cli_path(requested_path.as_deref()).is_none() {
+        refresh_status(state, paths)?;
+        return Ok(false);
+    }
+
+    Ok(preflight(state, paths, requested_path, false)?.updated)
+}
+
 fn persist_state(paths: &RuntimePaths, state: &PersistedState) -> Result<()> {
     state.save(&paths.state_file)
 }
 
-fn resolve_cli_path(explicit_path: Option<&Path>) -> Option<PathBuf> {
+#[cfg(test)]
+fn persist_if_changed(
+    paths: &RuntimePaths,
+    state: &PersistedState,
+    original_state: &PersistedState,
+) -> Result<()> {
+    if state != original_state {
+        persist_state(paths, state)?;
+    }
+
+    Ok(())
+}
+
+pub(crate) fn resolve_cli_path(explicit_path: Option<&Path>) -> Option<PathBuf> {
     if let Some(path) = explicit_path {
         if is_executable(path) {
             return Some(path.to_path_buf());
@@ -264,14 +311,39 @@ fn known_cli_locations() -> Vec<PathBuf> {
 }
 
 fn requested_cli_path(state: &PersistedState) -> Option<PathBuf> {
-    state
-        .cli_path
-        .clone()
-        .or_else(|| {
-            std::env::var_os("CODEX_CLI_PATH")
-                .filter(|value| !value.is_empty())
-                .map(PathBuf::from)
-        })
+    state.cli_path.clone().or_else(|| {
+        std::env::var_os("CODEX_CLI_PATH")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    })
+}
+
+fn mark_cli_missing(state: &mut PersistedState) {
+    state.cli_path = None;
+    state.cli_installed_version = None;
+    state.cli_last_verified_at = None;
+    state.cli_status = CliStatus::NotInstalled;
+    state.cli_error_message = Some(CLI_NOT_INSTALLED_MESSAGE.to_string());
+}
+
+#[cfg(test)]
+fn cached_installed_version_if_fresh(state: &PersistedState, cli_path: &Path) -> Option<String> {
+    let cached_path = state.cli_path.as_deref()?;
+    if cached_path != cli_path {
+        return None;
+    }
+
+    let installed_version = state.cli_installed_version.clone()?;
+    let last_verified_at = state.cli_last_verified_at?;
+    if state.cli_status == CliStatus::Failed {
+        return None;
+    }
+
+    if Utc::now().signed_duration_since(last_verified_at) >= CLI_INSTALLED_VERSION_TTL {
+        return None;
+    }
+
+    Some(installed_version)
 }
 
 fn should_skip_latest_version_check(
@@ -583,7 +655,9 @@ fn node_toolchain_dir(path: &Path) -> bool {
 }
 
 fn is_executable(path: &Path) -> bool {
-    path.is_file()
+    fs::metadata(path)
+        .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -592,6 +666,7 @@ mod tests {
     use crate::{
         config::RuntimePaths,
         state::{CliStatus, PersistedState},
+        test_util::env_lock,
     };
     use chrono::Utc;
     use std::{fs, os::unix::fs::PermissionsExt, path::Path};
@@ -744,6 +819,202 @@ mod tests {
         assert_eq!(state.cli_latest_version.as_deref(), Some("0.42.0"));
         assert_eq!(state.cli_status, CliStatus::UpToDate);
         assert_eq!(state.cli_error_message, None);
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_cached_status_uses_cached_installed_version_without_running_cli() -> Result<()> {
+        let temp = tempdir()?;
+        let paths = test_runtime_paths(temp.path());
+        paths.ensure_dirs()?;
+
+        let codex_path = temp.path().join("codex");
+        write_executable_script(
+            &codex_path,
+            "#!/bin/sh\necho 'cli should not run during cached refresh' >&2\nexit 99\n",
+        )?;
+
+        let mut state = PersistedState::new(true);
+        state.cli_path = Some(codex_path.clone());
+        state.cli_installed_version = Some("0.42.0".to_string());
+        state.cli_latest_version = Some("0.42.1".to_string());
+        state.cli_last_check_at = Some(Utc::now() - Duration::minutes(30));
+        state.cli_last_verified_at = Some(Utc::now() - Duration::minutes(30));
+
+        refresh_cached_status(&mut state, &paths)?;
+
+        assert_eq!(state.cli_path.as_deref(), Some(codex_path.as_path()));
+        assert_eq!(state.cli_installed_version.as_deref(), Some("0.42.0"));
+        assert_eq!(state.cli_status, CliStatus::UpdateRequired);
+        assert_eq!(state.cli_error_message, None);
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_cached_status_invalidates_missing_cached_cli_path() -> Result<()> {
+        let _env_guard = env_lock();
+        let temp = tempdir()?;
+        let paths = test_runtime_paths(temp.path());
+        paths.ensure_dirs()?;
+
+        let original_home = std::env::var_os("HOME");
+        let original_path = std::env::var_os("PATH");
+        let original_nvm_dir = std::env::var_os("NVM_DIR");
+        let original_codex_cli_path = std::env::var_os("CODEX_CLI_PATH");
+        std::env::set_var("HOME", temp.path());
+        std::env::set_var("PATH", temp.path().join("missing-bin"));
+        std::env::remove_var("NVM_DIR");
+        std::env::remove_var("CODEX_CLI_PATH");
+
+        let missing_path = temp.path().join("missing-codex");
+        let mut state = PersistedState::new(true);
+        state.cli_path = Some(missing_path);
+        state.cli_installed_version = Some("0.42.0".to_string());
+        state.cli_last_verified_at = Some(Utc::now() - Duration::minutes(30));
+
+        refresh_cached_status(&mut state, &paths)?;
+
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        if let Some(path) = original_path {
+            std::env::set_var("PATH", path);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(nvm_dir) = original_nvm_dir {
+            std::env::set_var("NVM_DIR", nvm_dir);
+        } else {
+            std::env::remove_var("NVM_DIR");
+        }
+        if let Some(cli_path) = original_codex_cli_path {
+            std::env::set_var("CODEX_CLI_PATH", cli_path);
+        } else {
+            std::env::remove_var("CODEX_CLI_PATH");
+        }
+
+        assert_eq!(state.cli_path, None);
+        assert_eq!(state.cli_installed_version, None);
+        assert_eq!(state.cli_status, CliStatus::NotInstalled);
+        assert_eq!(
+            state.cli_error_message.as_deref(),
+            Some(CLI_NOT_INSTALLED_MESSAGE)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_status_marks_missing_cli_as_not_installed() -> Result<()> {
+        let _env_guard = env_lock();
+        let temp = tempdir()?;
+        let paths = test_runtime_paths(temp.path());
+        paths.ensure_dirs()?;
+
+        let original_home = std::env::var_os("HOME");
+        let original_path = std::env::var_os("PATH");
+        let original_nvm_dir = std::env::var_os("NVM_DIR");
+        let original_codex_cli_path = std::env::var_os("CODEX_CLI_PATH");
+        std::env::set_var("HOME", temp.path());
+        std::env::set_var("PATH", temp.path().join("missing-bin"));
+        std::env::remove_var("NVM_DIR");
+        std::env::remove_var("CODEX_CLI_PATH");
+
+        let mut state = PersistedState::new(true);
+        refresh_status(&mut state, &paths)?;
+
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        if let Some(path) = original_path {
+            std::env::set_var("PATH", path);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(nvm_dir) = original_nvm_dir {
+            std::env::set_var("NVM_DIR", nvm_dir);
+        } else {
+            std::env::remove_var("NVM_DIR");
+        }
+        if let Some(cli_path) = original_codex_cli_path {
+            std::env::set_var("CODEX_CLI_PATH", cli_path);
+        } else {
+            std::env::remove_var("CODEX_CLI_PATH");
+        }
+
+        assert_eq!(state.cli_path, None);
+        assert_eq!(state.cli_installed_version, None);
+        assert_eq!(state.cli_status, CliStatus::NotInstalled);
+        assert_eq!(
+            state.cli_error_message.as_deref(),
+            Some(CLI_NOT_INSTALLED_MESSAGE)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn reconcile_if_present_upgrades_outdated_cli() -> Result<()> {
+        let _env_guard = env_lock();
+        let temp = tempdir()?;
+        let paths = test_runtime_paths(temp.path());
+        paths.ensure_dirs()?;
+
+        let bin_dir = temp.path().join("bin");
+        fs::create_dir_all(&bin_dir)?;
+
+        let codex_path = bin_dir.join("codex");
+        write_executable_script(
+            &codex_path,
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ] || [ \"$1\" = \"version\" ]; then\n  echo 'codex-cli v0.42.0'\n  exit 0\nfi\nexit 1\n",
+        )?;
+
+        let npm_path = bin_dir.join("npm");
+        write_executable_script(
+            &npm_path,
+            "#!/bin/sh\nif [ \"$1\" = \"view\" ] && [ \"$2\" = \"@openai/codex\" ] && [ \"$3\" = \"version\" ]; then\n  echo '0.42.1'\n  exit 0\nfi\nif [ \"$1\" = \"install\" ] && [ \"$2\" = \"-g\" ]; then\n  printf '%s\\n' '#!/bin/sh' 'if [ \"$1\" = \"--version\" ] || [ \"$1\" = \"version\" ]; then' \"  echo 'codex-cli v0.42.1'\" '  exit 0' 'fi' 'exit 1' > \"$FAKE_CODEX_PATH\"\n  exit 0\nfi\nexit 1\n",
+        )?;
+
+        let original_home = std::env::var_os("HOME");
+        let original_path = std::env::var_os("PATH");
+        let original_nvm_dir = std::env::var_os("NVM_DIR");
+        std::env::set_var("HOME", temp.path());
+        std::env::set_var("PATH", std::env::join_paths([bin_dir.clone()])?);
+        std::env::remove_var("NVM_DIR");
+        std::env::set_var("FAKE_CODEX_PATH", &codex_path);
+
+        assert_eq!(npm_program(), npm_path);
+
+        let mut state = PersistedState::new(true);
+        state.cli_path = Some(codex_path.clone());
+
+        let updated = reconcile_if_present(&mut state, &paths)?;
+
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        if let Some(path) = original_path {
+            std::env::set_var("PATH", path);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(nvm_dir) = original_nvm_dir {
+            std::env::set_var("NVM_DIR", nvm_dir);
+        } else {
+            std::env::remove_var("NVM_DIR");
+        }
+        std::env::remove_var("FAKE_CODEX_PATH");
+
+        assert!(updated);
+        assert_eq!(state.cli_path.as_deref(), Some(codex_path.as_path()));
+        assert_eq!(state.cli_installed_version.as_deref(), Some("0.42.1"));
+        assert_eq!(state.cli_latest_version.as_deref(), Some("0.42.1"));
+        assert_eq!(state.cli_status, CliStatus::UpToDate);
+        assert_eq!(read_installed_version(&codex_path)?, "0.42.1");
         Ok(())
     }
 }

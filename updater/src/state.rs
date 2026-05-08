@@ -40,6 +40,7 @@ pub enum UpdateStatus {
 pub enum CliStatus {
     #[default]
     Unknown,
+    NotInstalled,
     Checking,
     UpToDate,
     UpdateRequired,
@@ -57,6 +58,8 @@ pub struct ArtifactPaths {
     /// files.
     #[serde(rename = "deb_path")]
     pub package_path: Option<PathBuf>,
+    #[serde(default)]
+    pub rollback_package_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -74,6 +77,10 @@ pub struct PersistedState {
     pub notified_events: BTreeSet<String>,
     pub auto_install_on_app_exit: bool,
     #[serde(default)]
+    pub last_known_good_version: Option<String>,
+    #[serde(default)]
+    pub rollback_blocked_candidate_version: Option<String>,
+    #[serde(default)]
     pub cli_path: Option<PathBuf>,
     #[serde(default)]
     pub cli_installed_version: Option<String>,
@@ -84,7 +91,11 @@ pub struct PersistedState {
     #[serde(default)]
     pub cli_last_check_at: Option<DateTime<Utc>>,
     #[serde(default)]
+    pub cli_last_verified_at: Option<DateTime<Utc>>,
+    #[serde(default)]
     pub cli_error_message: Option<String>,
+    #[serde(default)]
+    pub cli_prompt_dismissed_at: Option<DateTime<Utc>>,
 }
 
 impl PersistedState {
@@ -102,12 +113,16 @@ impl PersistedState {
             error_message: None,
             notified_events: BTreeSet::new(),
             auto_install_on_app_exit,
+            last_known_good_version: None,
+            rollback_blocked_candidate_version: None,
             cli_path: None,
             cli_installed_version: None,
             cli_latest_version: None,
             cli_status: CliStatus::Unknown,
             cli_last_check_at: None,
+            cli_last_verified_at: None,
             cli_error_message: None,
+            cli_prompt_dismissed_at: None,
         }
     }
 
@@ -142,8 +157,7 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
     let parent = path
         .parent()
         .with_context(|| format!("{} has no parent directory", path.display()))?;
-    fs::create_dir_all(parent)
-        .with_context(|| format!("Failed to create {}", parent.display()))?;
+    fs::create_dir_all(parent).with_context(|| format!("Failed to create {}", parent.display()))?;
 
     let temp_path = atomic_temp_path(path);
     let mut temp_file = OpenOptions::new()
@@ -257,6 +271,19 @@ mod tests {
     }
 
     #[test]
+    fn serialises_not_installed_cli_status() {
+        let json = serde_json::to_string(&CliStatus::NotInstalled).expect("should serialise");
+        assert_eq!(json, r#""not_installed""#);
+    }
+
+    #[test]
+    fn deserialises_not_installed_cli_status() {
+        let status: CliStatus =
+            serde_json::from_str(r#""not_installed""#).expect("should parse not_installed");
+        assert_eq!(status, CliStatus::NotInstalled);
+    }
+
+    #[test]
     fn deserialises_legacy_building_deb_status() {
         let json = r#""building_deb""#;
         let status: UpdateStatus = serde_json::from_str(json).expect("should parse building_deb");
@@ -279,6 +306,7 @@ mod tests {
             dmg_path: None,
             workspace_dir: None,
             package_path: Some(std::path::PathBuf::from("/tmp/codex.rpm")),
+            rollback_package_path: None,
         };
         let json = serde_json::to_string(&paths).expect("should serialise");
         assert!(
