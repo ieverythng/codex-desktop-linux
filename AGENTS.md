@@ -33,7 +33,7 @@ The current working flow is:
 - `scripts/lib/webview-install.sh`
   Webview asset extraction and final `codex-app/` install layout.
 - `scripts/lib/bundled-plugins.sh`
-  Linux Computer Use backend build, plugin staging, and bundled-plugin marketplace generation.
+  Linux Computer Use backend build, COSMIC helper build, plugin staging, and bundled-plugin marketplace generation.
 - `scripts/build-deb.sh`
   Builds the `.deb` from the already-generated `codex-app/`.
 - `scripts/build-rpm.sh`
@@ -67,7 +67,11 @@ The current working flow is:
 - `updater/Cargo.toml`
   Source of truth for the updater crate version and dependency policy.
 - `computer-use-linux/`
-  Rust crate implementing the Linux Computer Use MCP backend (`codex-computer-use-linux` binary). Talks AT-SPI to read accessibility trees, captures screenshots through GNOME Shell DBus or XDG Desktop Portal, and synthesizes input via `ydotool`. Runs as a subprocess of Codex Electron when the bundled plugin is registered.
+  Rust crate implementing the Linux Computer Use MCP backend (`codex-computer-use-linux` binary). Talks AT-SPI to read accessibility trees, captures screenshots through GNOME Shell DBus or XDG Desktop Portal, lists/focuses windows through `src/windowing/` backends, and synthesizes input via `ydotool`. Runs as a subprocess of Codex Electron when the bundled plugin is registered.
+- `computer-use-linux/src/windowing/`
+  Modular Computer Use window backend layer. Keep shared types, target resolution, fallback order, and focus verification in `mod.rs` / `target.rs` / `registry.rs`; keep desktop-specific listing, activation, probes, parsers, and tests in `backends/*.rs`.
+- `computer-use-linux/src/bin/codex-computer-use-cosmic.rs`
+  COSMIC Wayland helper binary used by the Linux Computer Use backend for compositor-native window enumeration and activation on COSMIC sessions.
 - `plugins/openai-bundled/plugins/computer-use/`
   Bundled plugin manifest for Linux Computer Use (`.codex-plugin/plugin.json` + `.mcp.json`). Author and license fields here must stay consistent with the repo's MIT license — they live alongside the runtime resources installed under `/opt/codex-desktop/resources/plugins/openai-bundled/`.
 - `packaging/linux/codex-update-manager-user-service.sh`
@@ -75,7 +79,11 @@ The current working flow is:
 - `packaging/linux/com.github.ilysenko.codex-desktop-linux.update.policy`
   Polkit policy installed under `/usr/share/polkit-1/actions/` so the privileged updater install steps trigger the desktop authentication agent instead of `pkexec`'s textual fallback.
 - `scripts/patch-linux-window-ui.js`
-  ASAR patcher. Independent fail-soft patch functions with regex-driven needles. Each upstream-bundle change goes here.
+  ASAR patcher CLI and compatibility export surface. The implementation lives in `scripts/patches/`.
+- `scripts/patches/`
+  Modular ASAR patch registry and patch groups. Keep patch order in `scripts/patches/registry.js`; add feature-specific needles to the smallest matching module.
+- `scripts/ci/validate-patch-report.js`
+  CI guard that reads `patch-report.json` and fails upstream-build CI when a `required-upstream` patch is missing or skipped.
 - `scripts/patch-linux-window-ui.test.js`
   Node test suite for the patcher. Run with `node --test`.
 - `docs/webview-server-evaluation.md`
@@ -109,7 +117,7 @@ Do not assume `codex-app/` is pristine. If behavior differs from `install.sh`, p
 - CLI preflight:
   Before Electron launches, the generated launcher asks `codex-update-manager` to verify the installed Codex CLI, prompt to install it when it is missing, and update it if the npm package is newer. Terminal launches prompt inline; GUI launches prefer `kdialog` on KDE/Plasma, otherwise `zenity`, before falling back to an actionable desktop notification. Missing-CLI automatic installation is launcher-scoped: the daemon and `codex-update-manager status` report `cli_status: NotInstalled` and may notify, but they do not attempt installation on their own. The check is best-effort: it uses a 1-hour cooldown for npm registry lookups, caches local CLI version reads to keep startup light, falls back to `npm install -g --prefix ~/.local` if a global install fails, and warns instead of blocking app launch when the refresh attempt does not succeed.
 - ASAR patches are independent and fail-soft:
-  `scripts/patch-linux-window-ui.js` is structured as a chain of small, independent patch functions called from `patchMainBundleSource` and `patchExtractedApp`. Each one has its own regex-driven needles, an idempotency check, and a `console.warn` fall-back when the upstream bundle drifts. Current patches: `applyLinuxWindowOptionsPatch`, `applyLinuxMenuPatch`, `applyLinuxSetIconPatch`, `applyLinuxOpaqueBackgroundPatch`, `applyLinuxFileManagerPatch`, `applyLinuxTrayPatch`, `applyLinuxSingleInstancePatch`, `applyLinuxComputerUsePluginGatePatch`, `applyLinuxTrayCloseSettingPatch`, `applyLinuxSettingsPersistencePatch`, `applyLinuxLaunchActionArgsPatch`, `applyLinuxHotkeyWindowPrewarmPatch`, `applyBrowserAnnotationScreenshotPatch`. Plus `patchKeybindsSettingsAssets` (transactional — atomic, fail-soft via `WARN: Keybinds settings patch skipped: ...`) and `patchCommentPreloadBundle` for browser annotation fixes. The three Computer Use UI gates (`applyLinuxComputerUseFeaturePatch`, `applyLinuxComputerUseRendererAvailabilityPatch`, `applyLinuxComputerUseInstallFlowPatch`) are opt-in — see "Linux Computer Use plugin gate" below. When adding a new needle, mirror this pattern — never `throw`.
+  `scripts/patches/registry.js` is the source of truth for patch order and CI policy. Each patch function has its own regex-driven needles, an idempotency check, and a `console.warn` fall-back when the upstream bundle drifts. Current groups: main-process shell/window patches, webview asset patches, keybinds settings, launch actions, Computer Use gates, and package metadata. The wrapper `scripts/patch-linux-window-ui.js` keeps the old CLI and test export surface. When adding a new needle, mirror this pattern — never `throw` unless the existing patch is intentionally required.
 - Linux file manager integration:
   `applyLinuxFileManagerPatch` injects a Linux implementation for `Open in File Manager`. If the upstream minified bundle no longer matches, the install continues and emits exactly `Failed to apply Linux File Manager Patch`.
 - Linux Computer Use plugin gate:
@@ -117,6 +125,8 @@ Do not assume `codex-app/` is pristine. If behavior differs from `install.sh`, p
   - **Default-on:** `applyLinuxComputerUsePluginGatePatch` flips the bundled-plugin manifest from `darwin`-only to `darwin || linux` and adds `installWhenMissing: true` so the MCP plugin auto-registers. Pure platform-port glue — no Statsig involvement, no behavioural override; it has shipped on by default since the project's first release.
   - **Opt-in:** `applyLinuxComputerUseFeaturePatch`, `applyLinuxComputerUseRendererAvailabilityPatch`, and `applyLinuxComputerUseInstallFlowPatch` together unlock the Codex Desktop UI controls. The install-flow patch in particular falls back to `navigator.userAgent.includes("Linux")` as an OR-clause against the `computer_use` Statsig flag, which is why it is deliberately not on by default. The orchestrator (`patchMainBundleSource` / `patchExtractedApp`) calls `isComputerUseUiEnabled()` once per build; the helper returns `true` when `process.env.CODEX_LINUX_ENABLE_COMPUTER_USE_UI === "1"` OR `~/.config/codex-desktop/settings.json` contains `"codex-linux-computer-use-ui-enabled": true`. The settings-flag fallback exists so the auto-updater (a `systemd --user` service that does not inherit interactive shell env) can keep applying the UI patches across rebuilds without the user re-exporting an env var on every login.
   - **Out of scope:** OpenAI per-account Statsig rollouts that gate other features (`gpt-5.5` model rollout is the recurring example). Those are decided server-side per account and there is nothing in the local install that controls them.
+- Linux Computer Use window backends:
+  Add new desktop/window-manager support under `computer-use-linux/src/windowing/backends/` and register it in `windowing/registry.rs`; avoid adding backend-specific branches to `server.rs` or `diagnostics.rs`. GNOME uses `org.gnome.Shell.Introspect` for listing plus the bundled `codex-window-control@openai.com` GNOME Shell extension for exact activation. COSMIC Wayland uses the bundled `codex-computer-use-cosmic` helper, which talks directly to the compositor's COSMIC toplevel Wayland protocols. When neither backend is available, Computer Use still supports screenshots, AT-SPI, and global `ydotool` input, but not verified window-targeted keyboard input.
 - Linux settings persistence:
   `applyLinuxSettingsPersistencePatch` inserts `codexLinuxPersistSettingsState(...)` so the keybinds-settings page toggles (system tray, warm start, compact prompt window) are mirrored to `~/.config/codex-desktop/settings.json`, where `linux_setting_enabled` in `install.sh` reads them. The patch is fail-soft: if the upstream `Yb` state-file marker or `set-global-state` IPC handler isn't present, the patch logs a warning and skips, leaving keybinds toggles in-memory only.
 - Linux warm-start handoff:
