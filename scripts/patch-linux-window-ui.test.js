@@ -34,6 +34,7 @@ const {
   applyLinuxSingleInstancePatch,
   applyLinuxTrayCloseSettingPatch,
   applyLinuxTrayPatch,
+  applyLinuxWillQuitDrainTimeoutPatch,
   applyLinuxWindowOptionsPatch,
   isComputerUseUiEnabled,
   patchMainBundleSource,
@@ -106,6 +107,12 @@ function explicitQuitBundleFixture() {
 function beforeQuitConfirmationBundleFixture() {
   return [
     "n.app.on(`before-quit`,o=>{let s=BI(),c=t.sr().some(e=>e.status===`ACTIVE`);if(e||i.canQuitWithoutPrompt()||r||!s&&!c){g=!0,a.markAppQuitting();return}let l=n.app.getName();if(n.dialog.showMessageBoxSync({type:`warning`,buttons:[`Quit`,`Cancel`],defaultId:0,cancelId:1,noLink:!0,title:`Quit ${l}?`,message:`Quit ${l}?`,detail:vB({hasInProgressLocalConversation:s,hasEnabledAutomations:c})})!==0){o.preventDefault();return}i.markQuitApproved(),g=!0,a.markAppQuitting()});",
+  ].join("");
+}
+
+function willQuitDrainBundleFixture() {
+  return [
+    "n.app.on(`will-quit`,e=>{if(g=!0,!h){if(i.shouldSkipDrainBeforeQuit()){mB({hotkeyWindowLifecycleManager:c,globalDictationLifecycleManager:l,flushAndDisposeContexts:d,disposables:f});return}e.preventDefault(),h=!0,c.dispose(),l.dispose(),Promise.all([...u.values()].map(e=>e.flush())).finally(()=>{d(),f.dispose(),n.app.quit()})}});",
   ].join("");
 }
 
@@ -253,6 +260,19 @@ test("bypasses the upstream before-quit confirmation after a Linux explicit quit
     patched,
     /if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|i\.canQuitWithoutPrompt\(\)\|\|r\|\|!s&&!c\)\{g=!0,a\.markAppQuitting\(\);return\}/,
   );
+});
+
+test("adds a bounded will-quit drain fallback for Linux explicit quit", () => {
+  const source = `${mainBundlePrefix}${willQuitDrainBundleFixture()}`;
+  const patched = applyPatchTwice(
+    applyLinuxWillQuitDrainTimeoutPatch,
+    applyLinuxQuitGuardPatch(source),
+  );
+
+  assert.match(patched, /codexLinuxExplicitQuitDrainTimeoutMs=3e3/);
+  assert.match(patched, /\(\(\)=>\{let codexLinuxFinalizeQuit=\(\)=>\{d\(\),f\.dispose\(\),n\.app\.quit\(\)\},codexLinuxDrainPromise=Promise\.all\(\[\.\.\.u\.values\(\)\]\.map\(e=>e\.flush\(\)\)\);/);
+  assert.match(patched, /if\(process\.platform===`linux`&&\(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress\(\)\)\)\{Promise\.race\(\[codexLinuxDrainPromise,new Promise\(e=>setTimeout\(e,typeof codexLinuxExplicitQuitDrainTimeoutMs===\\`number\\`\?codexLinuxExplicitQuitDrainTimeoutMs:3e3\)\)\]\)\.finally\(codexLinuxFinalizeQuit\);return\}/);
+  assert.match(patched, /codexLinuxDrainPromise\.finally\(codexLinuxFinalizeQuit\)\}\)\(\)/);
 });
 
 test("marks Linux quit-in-progress for the tray quit path", () => {

@@ -47,6 +47,7 @@ const {
   applyLinuxSetIconPatch,
   applyLinuxSingleInstancePatch,
   applyLinuxTrayPatch,
+  applyLinuxWillQuitDrainTimeoutPatch,
   applyLinuxWindowOptionsPatch,
 } = require("./patches/main-process.js");
 const {
@@ -135,6 +136,7 @@ module.exports = {
   applyLinuxSingleInstancePatch,
   applyLinuxTrayCloseSettingPatch,
   applyLinuxTrayPatch,
+  applyLinuxWillQuitDrainTimeoutPatch,
   applyLinuxWindowOptionsPatch,
   createPatchReport,
   isComputerUseUiEnabled,

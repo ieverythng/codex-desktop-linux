@@ -369,7 +369,7 @@ function applyLinuxQuitGuardPatch(currentSource) {
   const legacyQuitGuardSuffix =
     "let codexLinuxQuitInProgress=!1,codexLinuxMarkQuitInProgress=()=>{codexLinuxQuitInProgress=!0},codexLinuxIsQuitInProgress=()=>codexLinuxQuitInProgress===!0;";
   const quitGuardSuffix =
-    "let codexLinuxQuitInProgress=!1,codexLinuxExplicitQuitApproved=!1,codexLinuxMarkQuitInProgress=()=>{codexLinuxQuitInProgress=!0},codexLinuxPrepareForExplicitQuit=()=>{codexLinuxExplicitQuitApproved=!0,codexLinuxMarkQuitInProgress()},codexLinuxShouldBypassQuitPrompt=()=>codexLinuxExplicitQuitApproved===!0,codexLinuxIsQuitInProgress=()=>codexLinuxQuitInProgress===!0;";
+    "let codexLinuxQuitInProgress=!1,codexLinuxExplicitQuitApproved=!1,codexLinuxExplicitQuitDrainTimeoutMs=3e3,codexLinuxMarkQuitInProgress=()=>{codexLinuxQuitInProgress=!0},codexLinuxPrepareForExplicitQuit=()=>{codexLinuxExplicitQuitApproved=!0,codexLinuxMarkQuitInProgress()},codexLinuxShouldBypassQuitPrompt=()=>codexLinuxExplicitQuitApproved===!0,codexLinuxIsQuitInProgress=()=>codexLinuxQuitInProgress===!0;";
   const quitGuardPatch = `${quitGuardNeedle}${quitGuardSuffix}`;
 
   if (patchedSource.includes("codexLinuxExplicitQuitApproved=!1")) {
@@ -405,6 +405,44 @@ function applyLinuxQuitGuardPatch(currentSource) {
 
 function linuxExplicitQuitExpression() {
   return "typeof codexLinuxPrepareForExplicitQuit===`function`?codexLinuxPrepareForExplicitQuit():typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),";
+}
+
+function applyLinuxWillQuitDrainTimeoutPatch(currentSource) {
+  let patchedSource = currentSource;
+
+  const explicitQuitDrainGuard =
+    "process.platform===`linux`&&(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress())";
+  const originalDrainSnippet =
+    "Promise.all([...u.values()].map(e=>e.flush())).finally(()=>{d(),f.dispose(),n.app.quit()})";
+  const patchedDrainSnippet =
+    "(()=>{let codexLinuxFinalizeQuit=()=>{d(),f.dispose(),n.app.quit()},codexLinuxDrainPromise=Promise.all([...u.values()].map(e=>e.flush()));" +
+    `if(${explicitQuitDrainGuard}){Promise.race([codexLinuxDrainPromise,new Promise(e=>setTimeout(e,typeof codexLinuxExplicitQuitDrainTimeoutMs===\\\`number\\\`?codexLinuxExplicitQuitDrainTimeoutMs:3e3))]).finally(codexLinuxFinalizeQuit);return}` +
+    "codexLinuxDrainPromise.finally(codexLinuxFinalizeQuit)})()";
+
+  if (patchedSource.includes("codexLinuxDrainPromise=Promise.all([...u.values()].map(e=>e.flush()))")) {
+    return patchedSource;
+  }
+
+  if (patchedSource.includes(originalDrainSnippet)) {
+    return patchedSource.replace(originalDrainSnippet, patchedDrainSnippet);
+  }
+
+  const drainRegex =
+    /Promise\.all\(\[\.\.\.([A-Za-z_$][\w$]*)\.values\(\)\]\.map\(e=>e\.flush\(\)\)\)\.finally\(\(\)=>\{([A-Za-z_$][\w$]*)\(\),([A-Za-z_$][\w$]*)\.dispose\(\),([A-Za-z_$][\w$]*)\.app\.quit\(\)\}\)/;
+  if (drainRegex.test(patchedSource)) {
+    patchedSource = patchedSource.replace(
+      drainRegex,
+      (_match, globalStatesVar, flushDisposeVar, disposablesVar, electronVar) =>
+        `(()=>{let codexLinuxFinalizeQuit=()=>{${flushDisposeVar}(),${disposablesVar}.dispose(),${electronVar}.app.quit()},codexLinuxDrainPromise=Promise.all([...${globalStatesVar}.values()].map(e=>e.flush()));if(${explicitQuitDrainGuard}){Promise.race([codexLinuxDrainPromise,new Promise(e=>setTimeout(e,typeof codexLinuxExplicitQuitDrainTimeoutMs===\\\`number\\\`?codexLinuxExplicitQuitDrainTimeoutMs:3e3))]).finally(codexLinuxFinalizeQuit);return}codexLinuxDrainPromise.finally(codexLinuxFinalizeQuit)})()`,
+    );
+  } else if (
+    patchedSource.includes("n.app.on(`will-quit`,") &&
+    patchedSource.includes(".map(e=>e.flush())")
+  ) {
+    console.warn("WARN: Could not find will-quit drain sequence — skipping Linux explicit quit drain timeout patch");
+  }
+
+  return patchedSource;
 }
 
 function applyLinuxExplicitQuitPromptBypassPatch(currentSource) {
@@ -791,5 +829,6 @@ module.exports = {
   applyLinuxSetIconPatch,
   applyLinuxSingleInstancePatch,
   applyLinuxTrayPatch,
+  applyLinuxWillQuitDrainTimeoutPatch,
   applyLinuxWindowOptionsPatch,
 };
