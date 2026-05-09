@@ -2,6 +2,10 @@
 
 Before opening a pull request, please read [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Linux features
+
+Optional Linux-only additions live in `linux-features/`. They are for integrations that are useful for some users but should not become mandatory core patches, such as editor openers, extra staged resources, or experimental Linux behavior. Copy `linux-features/features.example.json` to the git-ignored `linux-features/features.json` before running `./install.sh` or building packages; enabled features are applied during the install/build pipeline, so changing this file later requires regenerating the app. See [`linux-features/README.md`](linux-features/README.md) for the feature layout and entrypoint contract.
+
 Unofficial Linux build of [OpenAI Codex Desktop](https://openai.com/codex/). The official Codex Desktop app is macOS-only — this project converts the upstream macOS `Codex.dmg` into a runnable Linux Electron app, ships native `.deb` / `.rpm` / `.pkg.tar.zst` packages plus a Nix flake, and includes a local auto-updater that rebuilds future Linux packages from newer upstream DMGs.
 
 ## Supported platforms
@@ -419,10 +423,6 @@ If an existing Electron process is detected, the launcher uses a warm-start hand
 Native-package-only launcher behavior (desktop-entry hints, `codex-update-manager` session bootstrapping, the launch-time update check) lives in `packaging/linux/codex-packaged-runtime.sh`, which the generated launcher loads only when present inside a packaged install.
 
 The current evaluation for a future Rust replacement of the local webview server lives in `docs/webview-server-evaluation.md`.
-
-## Linux features
-
-Optional Linux-only additions live in `linux-features/`. They are for integrations that are useful for some users but should not become mandatory core patches, such as editor openers, extra staged resources, or experimental Linux behavior. Copy `linux-features/features.example.json` to the git-ignored `linux-features/features.json` before running `./install.sh` or building packages; enabled features are applied during the install/build pipeline, so changing this file later requires regenerating the app. See [`linux-features/README.md`](linux-features/README.md) for the feature layout and entrypoint contract.
 
 ## Validation
 
