@@ -17,7 +17,10 @@ const {
   patchAssetFiles,
 } = require("./shared.js");
 const {
+  applyLinuxAvatarOverlayMousePassthroughPatch,
   applyBrowserUseNodeReplApprovalPatch,
+  applyLinuxExplicitIpcQuitPatch,
+  applyLinuxExplicitTrayQuitPatch,
   applyLinuxFileManagerPatch,
   applyLinuxGitOriginsSourceFallbackPatch,
   applyLinuxMenuPatch,
@@ -68,6 +71,16 @@ const MAIN_BUNDLE_PATCHES = [
     apply: (source) => applyLinuxQuitGuardPatch(source),
   },
   {
+    name: "linux-explicit-tray-quit",
+    ciPolicy: REQUIRED_UPSTREAM,
+    apply: (source) => applyLinuxExplicitTrayQuitPatch(source),
+  },
+  {
+    name: "linux-explicit-ipc-quit",
+    ciPolicy: REQUIRED_UPSTREAM,
+    apply: (source) => applyLinuxExplicitIpcQuitPatch(source),
+  },
+  {
     name: "linux-window-options",
     ciPolicy: OPTIONAL,
     apply: (source, context) => applyLinuxWindowOptionsPatch(source, context.iconAsset),
@@ -86,6 +99,11 @@ const MAIN_BUNDLE_PATCHES = [
     name: "linux-opaque-background",
     ciPolicy: OPTIONAL,
     apply: (source) => applyLinuxOpaqueBackgroundPatch(source),
+  },
+  {
+    name: "linux-avatar-overlay-mouse-passthrough",
+    ciPolicy: OPTIONAL,
+    apply: (source) => applyLinuxAvatarOverlayMousePassthroughPatch(source),
   },
   {
     name: "linux-file-manager",
