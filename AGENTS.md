@@ -139,7 +139,7 @@ Do not assume `codex-app/` is pristine. If behavior differs from `install.sh`, p
 - App liveness:
   The launcher writes a PID file to `~/.local/state/codex-desktop/app.pid`. The updater uses that plus `/proc` fallback to know whether Electron is still running.
 - Desktop icon association:
-  The launcher runs Electron with `--class=codex-desktop`, and the desktop file sets `StartupWMClass=codex-desktop` so the taskbar/dock can associate the correct icon.
+  The launcher runs Electron with `--class=codex-desktop`, but Electron reports the visible window as `WM_CLASS(..., "Codex")`; desktop files set `StartupWMClass=Codex` so the taskbar/dock can associate the correct icon.
 - Webview server:
   The launcher starts a local `python3 -m http.server 5175` from `content/webview/`, waits for port `5175` to become reachable, verifies that `http://127.0.0.1:5175/index.html` serves the expected Codex startup markers, and only then launches Electron because the extracted app expects local webview assets there.
 - Wayland/GPU compatibility:
