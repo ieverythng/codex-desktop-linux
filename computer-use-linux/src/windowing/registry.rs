@@ -118,17 +118,31 @@ pub fn backend_can_exact_focus(id: &str) -> bool {
 pub async fn list_windows() -> Result<Vec<WindowInfo>> {
     let mut errors = Vec::new();
     for backend in BACKEND_ORDER {
-        match list_windows_for(*backend).await {
-            Ok(windows) => return Ok(windows),
-            Err(error) => {
-                let label = descriptor(backend.id())
-                    .map(|item| item.failure_label)
-                    .unwrap_or(backend.id());
-                errors.push(format!("{label} failed: {error:#}"));
-            }
+        if let Some(windows) =
+            usable_backend_windows(*backend, list_windows_for(*backend).await, &mut errors)
+        {
+            return Ok(windows);
         }
     }
     Err(anyhow!(errors.join("; ")))
+}
+
+fn usable_backend_windows(
+    backend: BackendKind,
+    result: Result<Vec<WindowInfo>>,
+    errors: &mut Vec<String>,
+) -> Option<Vec<WindowInfo>> {
+    match result {
+        Ok(windows) if !windows.is_empty() => Some(windows),
+        Ok(_) => {
+            errors.push(format!("{} returned no windows", backend.failure_label()));
+            None
+        }
+        Err(error) => {
+            errors.push(format!("{} failed: {error:#}", backend.failure_label()));
+            None
+        }
+    }
 }
 
 async fn list_windows_for(backend: BackendKind) -> Result<Vec<WindowInfo>> {
@@ -193,5 +207,73 @@ impl BackendKind {
             BackendKind::Hyprland => HYPRLAND_BACKEND,
             BackendKind::I3 => I3_BACKEND,
         }
+    }
+
+    fn failure_label(self) -> &'static str {
+        descriptor(self.id())
+            .map(|item| item.failure_label)
+            .unwrap_or(self.id())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::windowing::types::WindowBounds;
+
+    fn window(backend: &str) -> WindowInfo {
+        WindowInfo {
+            window_id: 1,
+            title: Some("Codex".to_string()),
+            app_id: Some("codex-desktop".to_string()),
+            wm_class: Some("codex-desktop".to_string()),
+            pid: Some(1234),
+            bounds: Some(WindowBounds {
+                x: Some(0),
+                y: Some(0),
+                width: 800,
+                height: 600,
+            }),
+            workspace: None,
+            focused: true,
+            hidden: false,
+            client_type: Some("wayland".to_string()),
+            backend: backend.to_string(),
+            terminal: None,
+        }
+    }
+
+    #[test]
+    fn skips_empty_backend_results_so_later_backends_can_answer() {
+        let mut errors = Vec::new();
+
+        assert!(
+            usable_backend_windows(BackendKind::GnomeIntrospect, Ok(Vec::new()), &mut errors,)
+                .is_none()
+        );
+
+        let windows = usable_backend_windows(
+            BackendKind::Kwin,
+            Ok(vec![window(KWIN_BACKEND)]),
+            &mut errors,
+        )
+        .expect("non-empty backend result should be accepted");
+
+        assert_eq!(windows[0].backend, KWIN_BACKEND);
+        assert_eq!(errors, vec!["GNOME Shell Introspect returned no windows"]);
+    }
+
+    #[test]
+    fn records_backend_failures_with_registry_labels() {
+        let mut errors = Vec::new();
+
+        assert!(usable_backend_windows(
+            BackendKind::Kwin,
+            Err(anyhow!("loadScript failed")),
+            &mut errors,
+        )
+        .is_none());
+
+        assert_eq!(errors, vec!["KWin failed: loadScript failed"]);
     }
 }

@@ -17,9 +17,13 @@ const {
   applyLinuxComputerUseRendererAvailabilityPatch,
   applyLinuxAvatarOverlayMousePassthroughPatch,
   applyBrowserUseNodeReplApprovalPatch,
+  applyLinuxBrowserUseIabVisibleOnCreatePatch,
+  applyLinuxChromeExtensionStatusPatch,
+  applyLinuxChromePluginAutoInstallPatch,
   applyLinuxAppUpdaterBridgePatch,
   applyLinuxAppUpdaterMenuPatch,
   applyLinuxExplicitIpcQuitPatch,
+  applyLinuxExplicitQuitPromptBypassPatch,
   applyLinuxExplicitTrayQuitPatch,
   applyLinuxFileManagerPatch,
   applyLinuxGitOriginsSourceFallbackPatch,
@@ -33,6 +37,7 @@ const {
   applyLinuxSingleInstancePatch,
   applyLinuxTrayCloseSettingPatch,
   applyLinuxTrayPatch,
+  applyLinuxWillQuitDrainTimeoutPatch,
   applyLinuxWindowOptionsPatch,
   isComputerUseUiEnabled,
   patchMainBundleSource,
@@ -40,6 +45,12 @@ const {
   patchPackageJson,
   patchLinuxAppUpdaterBridge,
   createPatchReport,
+  corePatchDescriptors,
+  detectLinuxTargetContext,
+  discoverCorePatchDescriptors,
+  linuxTargetSummary,
+  normalizePatchDescriptors,
+  parseOsRelease,
   resolveDesktopName,
 } = require("./patch-linux-window-ui.js");
 const {
@@ -54,7 +65,6 @@ const alreadyOpaqueBackgroundBundle =
   "process.platform===`linux`?{backgroundColor:e?t:n,backgroundMaterial:null}:{backgroundColor:r,backgroundMaterial:null}";
 const opaqueBackgroundBundleWithDriftingGw =
   "var cM=`#00000000`,lM=`#000000`,uM=`#f9f9f9`;function OM(e){return e===`avatarOverlay`||e===`browserCommentPopup`}function jM({platform:e,appearance:t,opaqueWindowsEnabled:n,prefersDarkColors:r}){return e===`win32`&&!OM(t)?n?{backgroundColor:r?lM:uM,backgroundMaterial:`none`}:{backgroundColor:cM,backgroundMaterial:`mica`}:{backgroundColor:cM,backgroundMaterial:null}}function gw(e){return e.page==null?e.snapshot.url:mw(e.page)}";
-
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -77,6 +87,198 @@ function captureWarns(fn) {
     console.warn = originalWarn;
   }
 }
+
+test("Linux target context parses distro, package, and desktop details", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-linux-target-"));
+  try {
+    const osReleasePath = path.join(tempRoot, "os-release");
+    fs.writeFileSync(
+      osReleasePath,
+      [
+        "ID=ubuntu",
+        "ID_LIKE=\"debian\"",
+        "VERSION_ID=\"24.04\"",
+        "PRETTY_NAME=\"Ubuntu 24.04 LTS\"",
+      ].join("\n"),
+    );
+
+    const target = detectLinuxTargetContext({
+      env: {
+        OS_RELEASE_FILE: osReleasePath,
+        PATH: "",
+        XDG_CURRENT_DESKTOP: "KDE:GNOME",
+        XDG_SESSION_TYPE: "wayland",
+        WAYLAND_DISPLAY: "wayland-0",
+      },
+    });
+
+    assert.deepEqual(parseOsRelease(fs.readFileSync(osReleasePath, "utf8")).ID_LIKE, "debian");
+    assert.equal(target.distro.id, "ubuntu");
+    assert.deepEqual(target.distro.idLike, ["debian"]);
+    assert.equal(target.distro.versionMajor, 24);
+    assert.equal(target.packageFormat, "deb");
+    assert.equal(target.packageManager, "apt");
+    assert.equal(target.matchesId("debian"), true);
+    assert.equal(target.matchesId(["ubuntu", "fedora"]), true);
+    assert.equal(target.packageFormatIs("deb"), true);
+    assert.equal(target.desktopMatches("kde"), true);
+    assert.equal(target.desktopMatches(["plasma", "gnome"]), true);
+    assert.equal(target.versionAtLeast("24.04"), true);
+    assert.equal(target.versionAtLeast("24.10"), false);
+    assert.equal(target.wayland, true);
+    assert.match(linuxTargetSummary(target), /^ubuntu:24\.04\/deb:/);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("auto-discovered core patches can target a specific Linux distro", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-core-patch-root-"));
+  try {
+    const patchDir = path.join(tempRoot, "gentoo", "sample");
+    fs.mkdirSync(patchDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(patchDir, "patch.js"),
+      [
+        "\"use strict\";",
+        "module.exports = {",
+        "  id: \"gentoo-only-sample\",",
+        "  phase: \"main-bundle\",",
+        "  ciPolicy: \"required-upstream\",",
+        "  order: 30000,",
+        "  appliesTo: (context) => context.linux.matchesId(\"gentoo\"),",
+        "  apply: (source) => source.replace(\"codexLinuxGentooDisabled()\", \"codexLinuxGentooEnabled()\"),",
+        "};",
+      ].join("\n"),
+    );
+
+    const descriptors = discoverCorePatchDescriptors({ root: tempRoot });
+    assert.equal(descriptors.length, 1);
+    assert.equal(descriptors[0].id, "gentoo-only-sample");
+
+    const gentoo = detectLinuxTargetContext({
+      env: {
+        CODEX_LINUX_TARGET_ID: "gentoo",
+        CODEX_LINUX_TARGET_PACKAGE_FORMAT: "unknown",
+        PATH: "",
+      },
+    });
+    const ubuntu = detectLinuxTargetContext({
+      env: {
+        CODEX_LINUX_TARGET_ID: "ubuntu",
+        CODEX_LINUX_TARGET_ID_LIKE: "debian",
+        PATH: "",
+      },
+    });
+
+    assert.match(
+      captureWarns(() =>
+        patchMainBundleSource("codexLinuxGentooDisabled()", null, {
+          corePatchRoot: tempRoot,
+          linuxTarget: gentoo,
+        }),
+      ).value,
+      /codexLinuxGentooEnabled/,
+    );
+    assert.doesNotMatch(
+      captureWarns(() =>
+        patchMainBundleSource("codexLinuxGentooDisabled()", null, {
+          corePatchRoot: tempRoot,
+          linuxTarget: ubuntu,
+        }),
+      ).value,
+      /codexLinuxGentooEnabled/,
+    );
+
+    const tempApp = fs.mkdtempSync(path.join(os.tmpdir(), "codex-skipped-target-report-"));
+    try {
+      const buildDir = path.join(tempApp, ".vite", "build");
+      fs.mkdirSync(buildDir, { recursive: true });
+      fs.writeFileSync(path.join(buildDir, "main.js"), "codexLinuxGentooDisabled()");
+      const report = createPatchReport();
+      captureWarns(() =>
+        patchExtractedApp(tempApp, {
+          report,
+          corePatchRoot: tempRoot,
+          linuxTarget: ubuntu,
+        }),
+      );
+      assert.equal(
+        report.patches.find((patch) => patch.name === "gentoo-only-sample")?.status,
+        "skipped-target",
+      );
+      assert.equal(report.linuxTarget.distro.id, "ubuntu");
+    } finally {
+      fs.rmSync(tempApp, { recursive: true, force: true });
+    }
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("patch descriptor normalization rejects duplicate ids", () => {
+  assert.throws(
+    () => normalizePatchDescriptors([
+      { id: "duplicate", apply: (source) => source },
+      { id: "duplicate", apply: (source) => source },
+    ]),
+    /Duplicate patch descriptor id 'duplicate'/,
+  );
+});
+
+test("default core patch descriptors are grouped and unique", () => {
+  const descriptors = corePatchDescriptors();
+  const ids = descriptors.map((descriptor) => descriptor.id);
+  const expectedIds = [
+    "linux-quit-guard",
+    "linux-explicit-quit-prompt-bypass",
+    "linux-explicit-quit-drain-timeout",
+    "linux-explicit-tray-quit",
+    "linux-explicit-ipc-quit",
+    "linux-window-options",
+    "linux-menu",
+    "linux-set-icon",
+    "linux-opaque-background",
+    "linux-avatar-overlay-mouse-passthrough",
+    "linux-file-manager",
+    "linux-tray",
+    "linux-single-instance",
+    "linux-computer-use-ui-feature",
+    "linux-computer-use-plugin-gate",
+    "linux-chrome-plugin-auto-install",
+    "browser-use-node-repl-approval",
+    "linux-browser-use-iab-visible-on-create",
+    "linux-chrome-extension-status",
+    "linux-app-updater-menu",
+    "linux-tray-close-setting",
+    "linux-settings-persistence",
+    "linux-launch-actions",
+    "linux-hotkey-window-prewarm",
+    "linux-git-origins-source-fallback",
+    "linux-app-sunset-gate",
+    "opaque-window-default-general-settings",
+    "opaque-window-default-webview-index",
+    "opaque-window-default-resolved-theme",
+    "linux-computer-use-ui-availability",
+    "linux-computer-use-install-flow",
+    "linux-app-updater-bridge",
+    "browser-annotation-screenshot",
+    "keybinds-settings",
+    "package-desktop-name",
+  ];
+
+  assert.equal(new Set(ids).size, ids.length);
+  assert.deepEqual([...ids].sort(), [...expectedIds].sort());
+  assert.ok(descriptors.every((descriptor) => descriptor.sourcePath.includes(`${path.sep}core${path.sep}`)));
+  assert.equal(
+    descriptors.find((descriptor) => descriptor.id === "package-desktop-name")?.phase,
+    "extracted-app",
+  );
+  assert.match(
+    descriptors.find((descriptor) => descriptor.id === "linux-chrome-plugin-auto-install")?.sourcePath,
+    /main-process[\\/]browser-integrations[\\/]patch\.js$/,
+  );
+});
 
 function trayBundleFixture() {
   return [
@@ -102,10 +304,29 @@ function explicitQuitBundleFixture() {
   ].join("");
 }
 
+function beforeQuitConfirmationBundleFixture() {
+  return [
+    "n.app.on(`before-quit`,o=>{let s=BI(),c=t.sr().some(e=>e.status===`ACTIVE`);if(e||i.canQuitWithoutPrompt()||r||!s&&!c){g=!0,a.markAppQuitting();return}let l=n.app.getName();if(n.dialog.showMessageBoxSync({type:`warning`,buttons:[`Quit`,`Cancel`],defaultId:0,cancelId:1,noLink:!0,title:`Quit ${l}?`,message:`Quit ${l}?`,detail:vB({hasInProgressLocalConversation:s,hasEnabledAutomations:c})})!==0){o.preventDefault();return}i.markQuitApproved(),g=!0,a.markAppQuitting()});",
+  ].join("");
+}
+
+function willQuitDrainBundleFixture() {
+  return [
+    "n.app.on(`will-quit`,e=>{if(g=!0,!h){if(i.shouldSkipDrainBeforeQuit()){mB({hotkeyWindowLifecycleManager:c,globalDictationLifecycleManager:l,flushAndDisposeContexts:d,disposables:f});return}e.preventDefault(),h=!0,c.dispose(),l.dispose(),Promise.all([...u.values()].map(e=>e.flush())).finally(()=>{d(),f.dispose(),n.app.quit()})}});",
+  ].join("");
+}
+
 function computerUseGateBundleFixture() {
   return [
     "var Qt=`openai-bundled`,$t=`browser-use`,en=`chrome-internal`,tn=`computer-use`,nn=`latex-tectonic`;",
     "var $n=[{forceReload:!0,installWhenMissing:!0,name:$t,isEnabled:({features:e})=>e.browserAgentAvailable,migrate:cn},{name:en,isEnabled:({buildFlavor:e})=>rn(e)},{name:tn,isEnabled:({features:e,platform:t})=>t===`darwin`&&e.computerUse,migrate:wn},{name:nn,isEnabled:()=>!0}];",
+  ].join("");
+}
+
+function currentPluginGateBundleFixture() {
+  return [
+    "var lt=`browser-use`,ut=`chrome`,dt=`chrome-internal`,ft=`computer-use`,pt=`latex-tectonic`;",
+    "var Kr=[{forceReload:!0,installWhenMissing:!0,name:lt,isAvailable:({features:e})=>e.inAppBrowserUseAllowed,migrate:rr},{forceReload:!0,name:dt,isAvailable:({buildFlavor:e,features:t})=>Qn(e)&&t.externalBrowserUseAllowed},{forceReload:!0,name:ut,isAvailable:({buildFlavor:e,features:t})=>t.externalBrowserUseAllowed&&$n(e)},{name:ft,isAvailable:({features:e,platform:t})=>t===`darwin`&&e.computerUse,migrate:vr},{installWhenMissing:!0,name:ft,isAvailable:({buildFlavor:e,features:n,platform:r})=>t.T.isInternal(e)&&r===`win32`&&n.computerUse},{name:pt,isAvailable:()=>!0}];",
   ].join("");
 }
 
@@ -123,6 +344,29 @@ function computerUseRendererAvailabilityBundleFixture() {
 
 function computerUseInstallFlowBundleFixture() {
   return "function Qe({forceReloadPlugins:e,hostId:t}){let ne=f({featureName:`computer_use`,hostId:t}),re=!ne.isLoading&&ne.enabled,[L,R]=(0,Z.useState)({});return re}";
+}
+
+function chromeExtensionStatusBundleFixture() {
+  return [
+    "let r=require(`node:os`),i=require(`node:path`),o=require(`node:fs`);",
+    "var am=`com.google.Chrome`,om=`/usr/bin/open`,sm=/^[a-p]{32}$/;",
+    "function pm(e){if(!sm.test(e))throw Error(`Invalid extension id`);return e}",
+    "function cm(e){return`chrome://extensions/?id=${pm(e)}`}",
+    "function lm({extensionId:e,homeDir:t=(0,r.homedir)(),localAppDataDir:n=process.env.LOCALAPPDATA,platform:a=process.platform}){let s=pm(e),c=mm({homeDir:t,localAppDataDir:n,platform:a});return c==null||!(0,o.existsSync)(c)?!1:(0,o.readdirSync)(c,{withFileTypes:!0}).some(e=>e.isDirectory()&&(0,o.existsSync)((0,i.join)(c,e.name,`Extensions`,s)))}async function um({extensionId:e,platform:t=process.platform,detectChromeCommand:n=dm,runCommand:r=Hp}){if(t===`darwin`){await r(om,[`-b`,am,cm(e)]);return}if(t===`win32`){let t=n();if(t==null)throw Error(`Google Chrome is not installed`);await r(t,[cm(e)]);return}throw Error(`Opening Chrome extension settings is only supported on macOS and Windows`)}function dm(){return Rp(`google-chrome`)}",
+    "function mm({homeDir:e,localAppDataDir:t,platform:n}){return n===`darwin`?(0,i.join)(e,`Library`,`Application Support`,`Google`,`Chrome`):n===`win32`?(0,i.join)(t??(0,i.join)(e,`AppData`,`Local`),`Google`,`Chrome`,`User Data`):null}",
+    "function Rp(e){return e}async function Hp(){}",
+  ].join("");
+}
+
+function currentChromeExtensionStatusBundleFixture() {
+  return [
+    "let r=require(`node:os`),i=require(`node:path`),o=require(`node:fs`);",
+    "var nm=`com.google.Chrome`,rm=`/usr/bin/open`,im=/^[a-p]{32}$/;",
+    "function am(e){return`chrome://extensions/?id=${um(e)}`}",
+    "function om({extensionId:e,homeDir:t=(0,r.homedir)(),localAppDataDir:n=process.env.LOCALAPPDATA,platform:a=process.platform}){let s=um(e),c=dm({homeDir:t,localAppDataDir:n,platform:a});return c==null||!(0,o.existsSync)(c)?!1:(0,o.readdirSync)(c,{withFileTypes:!0}).some(e=>e.isDirectory()&&(0,o.existsSync)((0,i.join)(c,e.name,`Extensions`,s)))}async function sm({extensionId:e,platform:t=process.platform,detectChromeCommand:n=cm,runCommand:r=zp}){if(t===`darwin`){await r(rm,[`-b`,nm,am(e)]);return}if(t===`win32`){let t=n();if(t==null)throw Error(`Google Chrome is not installed`);await r(t,[am(e)]);return}throw Error(`Opening Chrome extension settings is only supported on macOS and Windows`)}function cm(){return Fp(`chrome.exe`)}",
+    "function lm(){return null}function um(e){let t=e.trim();if(!im.test(t))throw Error(`Invalid Chrome extension id`);return t}function dm({homeDir:e,localAppDataDir:t,platform:n}){return n===`darwin`?(0,i.join)(e,`Library`,`Application Support`,`Google`,`Chrome`):n===`win32`?(0,i.join)(t??(0,i.join)(e,`AppData`,`Local`),`Google`,`Chrome`,`User Data`):null}",
+    "function Fp(e){return e}async function zp(){}",
+  ].join("");
 }
 
 function currentLaunchActionBundleFixture() {
@@ -166,8 +410,22 @@ function appUpdaterBundleFixture() {
   ].join("");
 }
 
+function currentBootstrapUpdaterBundleFixture() {
+  return [
+    "let n=require(`electron`),i=require(`node:path`),o=require(`node:fs`),u=require(`node:child_process`);",
+    "c({onUpdateReadyChanged:e=>{a.sendMessageToAllRegisteredWindows({type:`app-update-ready-changed`,isUpdateReady:e})}});",
+    "var rK={enabled:!1,running:!1,state:`disabled`};",
+    "async function iK(){",
+    "let{startedAtMs:r,buildFlavor:a,desktopSentry:o,sparkleManager:s,setSparkleBridgeHandlers:c,setSecondInstanceArgsHandler:l}=t.x(),d=t.T.shouldIncludeSparkle(a,process.platform,process.env);",
+    "let M=oG({});let ee=pB(),te=()=>{ee.allowQuitTemporarilyForUpdateInstall(),n.app.quit()};",
+    "c({onInstallProgressChanged:e=>{E&&M.sendMessageToAllRegisteredWindows({type:`app-update-install-progress-changed`,installProgressPercent:e})},onUpdateReadyChanged:e=>{M.sendMessageToAllRegisteredWindows({type:`app-update-ready-changed`,isUpdateReady:e})},onUpdateLifecycleStateChanged:e=>{M.sendMessageToAllRegisteredWindows({type:`app-update-lifecycle-state-changed`,lifecycleState:e})},onInstallUpdatesRequested:()=>{te()},isTrustedIpcEvent:N});",
+    "}",
+  ].join("");
+}
+
 function avatarOverlayBundleFixture() {
   return [
+    "let u=require(`node:child_process`);",
     "var rV=`/avatar-overlay`,zB={width:356,height:320},oV={width:112,height:121},sV={width:276,height:131};",
     "var fV=class{window=null;openingWindowPromise=null;anchor=pV({x:0,y:0,...zB},oV);dragState=null;layout=null;mascotSize=oV;momentumTimer=null;mousePassthroughEnabled=!1;placement=`top-end`;pointerInteractive=!1;rendererReady=!1;traySize=null;",
     "constructor(e,t){this.windowManager=e,this.globalState=t}",
@@ -202,7 +460,10 @@ test("adds the Linux quit guard when electron/path/fs requires are split across 
   const patched = applyPatchTwice(applyLinuxQuitGuardPatch, source);
 
   assert.match(patched, /let codexLinuxQuitInProgress=!1/);
+  assert.match(patched, /codexLinuxExplicitQuitApproved=!1/);
   assert.match(patched, /codexLinuxMarkQuitInProgress=\(\)=>\{codexLinuxQuitInProgress=!0\}/);
+  assert.match(patched, /codexLinuxPrepareForExplicitQuit=\(\)=>\{codexLinuxExplicitQuitApproved=!0,codexLinuxMarkQuitInProgress\(\)\}/);
+  assert.match(patched, /codexLinuxShouldBypassQuitPrompt=\(\)=>codexLinuxExplicitQuitApproved===!0/);
   assert.match(patched, /codexLinuxIsQuitInProgress=\(\)=>codexLinuxQuitInProgress===!0/);
 });
 
@@ -213,9 +474,51 @@ test("adds the Linux quit guard when only the Electron require is recognizable",
   const patched = applyPatchTwice(applyLinuxQuitGuardPatch, source);
 
   assert.match(patched, /^let codexLinuxQuitInProgress=!1/);
+  assert.match(patched, /codexLinuxExplicitQuitApproved=!1/);
   assert.match(patched, /codexLinuxMarkQuitInProgress=\(\)=>\{codexLinuxQuitInProgress=!0\}/);
+  assert.match(patched, /codexLinuxPrepareForExplicitQuit=\(\)=>\{codexLinuxExplicitQuitApproved=!0,codexLinuxMarkQuitInProgress\(\)\}/);
+  assert.match(patched, /codexLinuxShouldBypassQuitPrompt=\(\)=>codexLinuxExplicitQuitApproved===!0/);
   assert.match(patched, /codexLinuxIsQuitInProgress=\(\)=>codexLinuxQuitInProgress===!0/);
   assert.equal((patched.match(/codexLinuxQuitInProgress=!1/g) ?? []).length, 1);
+});
+
+test("upgrades the legacy Linux quit guard helper when re-patching older bundles", () => {
+  const source =
+    "let n=require(`electron`),i=require(`node:path`),o=require(`node:fs`);let codexLinuxQuitInProgress=!1,codexLinuxMarkQuitInProgress=()=>{codexLinuxQuitInProgress=!0},codexLinuxIsQuitInProgress=()=>codexLinuxQuitInProgress===!0;var x=1;";
+
+  const patched = applyPatchTwice(applyLinuxQuitGuardPatch, source);
+
+  assert.doesNotMatch(patched, /let codexLinuxQuitInProgress=!1,codexLinuxMarkQuitInProgress=\(\)=>\{codexLinuxQuitInProgress=!0\},codexLinuxIsQuitInProgress=\(\)=>codexLinuxQuitInProgress===!0;/);
+  assert.match(patched, /codexLinuxPrepareForExplicitQuit=\(\)=>\{codexLinuxExplicitQuitApproved=!0,codexLinuxMarkQuitInProgress\(\)\}/);
+  assert.match(patched, /codexLinuxShouldBypassQuitPrompt=\(\)=>codexLinuxExplicitQuitApproved===!0/);
+});
+
+test("bypasses the upstream before-quit confirmation after a Linux explicit quit", () => {
+  const source = `${mainBundlePrefix}${beforeQuitConfirmationBundleFixture()}`;
+  const patched = applyPatchTwice(
+    applyLinuxExplicitQuitPromptBypassPatch,
+    applyLinuxQuitGuardPatch(source),
+  );
+
+  assert.match(
+    patched,
+    /if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|i\.canQuitWithoutPrompt\(\)\|\|r\|\|!s&&!c\)\{g=!0,a\.markAppQuitting\(\);return\}/,
+  );
+});
+
+test("adds a bounded will-quit drain fallback for Linux explicit quit", () => {
+  const source = `${mainBundlePrefix}${willQuitDrainBundleFixture()}`;
+  const patched = applyPatchTwice(
+    applyLinuxWillQuitDrainTimeoutPatch,
+    applyLinuxQuitGuardPatch(source),
+  );
+
+  assert.match(patched, /codexLinuxExplicitQuitDrainTimeoutMs=3e3/);
+  assert.match(patched, /\(\(\)=>\{let codexLinuxFinalizeQuit=\(\)=>\{d\(\),f\.dispose\(\),n\.app\.quit\(\)\},codexLinuxDrainPromise=Promise\.all\(\[\.\.\.u\.values\(\)\]\.map\(e=>e\.flush\(\)\)\);/);
+  assert.match(patched, /if\(process\.platform===`linux`&&\(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress\(\)\)\)\{Promise\.race\(\[codexLinuxDrainPromise,new Promise\(e=>setTimeout\(e,typeof codexLinuxExplicitQuitDrainTimeoutMs===`number`\?codexLinuxExplicitQuitDrainTimeoutMs:3e3\)\)\]\)\.finally\(codexLinuxFinalizeQuit\);return\}/);
+  assert.doesNotMatch(patched, /\\`number\\`/);
+  assert.match(patched, /codexLinuxDrainPromise\.finally\(codexLinuxFinalizeQuit\)\}\)\(\)/);
+  assert.doesNotThrow(() => new Function(patched));
 });
 
 test("marks Linux quit-in-progress for the tray quit path", () => {
@@ -227,7 +530,7 @@ test("marks Linux quit-in-progress for the tray quit path", () => {
 
   assert.match(
     patched,
-    /\{label:rB\(this\.appName\),click:\(\)=>\{typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),n\.app\.quit\(\)\}\}/,
+    /\{label:rB\(this\.appName\),click:\(\)=>\{typeof codexLinuxPrepareForExplicitQuit===`function`\?codexLinuxPrepareForExplicitQuit\(\):typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),n\.app\.quit\(\)\}\}/,
   );
 });
 
@@ -240,7 +543,7 @@ test("marks Linux quit-in-progress for the quit-app IPC path", () => {
 
   assert.match(
     patched,
-    /if\(o\.type===`quit-app`\)\{typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),n\.app\.quit\(\);return\}/,
+    /if\(o\.type===`quit-app`\)\{typeof codexLinuxPrepareForExplicitQuit===`function`\?codexLinuxPrepareForExplicitQuit\(\):typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),n\.app\.quit\(\);return\}/,
   );
 });
 
@@ -251,7 +554,7 @@ test("supports explicit tray quit patching when minified aliases drift", () => {
 
   assert.match(
     patched,
-    /\{label:rB\(this\.appName\),click:\(\)=>\{typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),x\.app\.quit\(\)\}\}/,
+    /\{label:rB\(this\.appName\),click:\(\)=>\{typeof codexLinuxPrepareForExplicitQuit===`function`\?codexLinuxPrepareForExplicitQuit\(\):typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),x\.app\.quit\(\)\}\}/,
   );
 });
 
@@ -262,7 +565,7 @@ test("supports explicit IPC quit patching when minified aliases drift", () => {
 
   assert.match(
     patched,
-    /if\(m\.type===`quit-app`\)\{typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),x\.app\.quit\(\);return\}/,
+    /if\(m\.type===`quit-app`\)\{typeof codexLinuxPrepareForExplicitQuit===`function`\?codexLinuxPrepareForExplicitQuit\(\):typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),x\.app\.quit\(\);return\}/,
   );
 });
 
@@ -303,7 +606,23 @@ test("adds Linux avatar overlay mouse passthrough recovery", () => {
   assert.match(patched, /codexLinuxSyncAvatarPointerInteractivity\(e\)/);
   assert.match(patched, /codexLinuxBuildAvatarInputShape\(e\)/);
   assert.match(patched, /codexLinuxApplyAvatarInputShape\(e\)/);
-  assert.match(patched, /typeof e\.setShape==`function`/);
+  assert.match(patched, /codexLinuxIsI3Session\(\)/);
+  assert.match(patched, /process\.env\.I3SOCK/);
+  assert.match(patched, /codexLinuxApplyAvatarCompositorHints\(e\)/);
+  assert.match(patched, /getNativeWindowHandle\?\.\(\)/);
+  assert.match(patched, /u\.execFile\(`xdotool`,\[`search`,`--pid`,String\(process\.pid\)\]/);
+  assert.match(patched, /u\.execFile\(`xwininfo`,\[`-id`,e\]/);
+  assert.match(patched, /u\.execFile\(`xprop`/);
+  assert.match(patched, /_GTK_FRAME_EXTENTS/);
+  assert.match(patched, /Override Redirect State/);
+  assert.match(patched, /Absolute upper-left X/);
+  assert.match(patched, /Number\(l\)!==t\.x/);
+  assert.match(patched, /Number\(h\)!==t\.y/);
+  assert.match(patched, /Number\(d\)!==t\.width/);
+  assert.doesNotMatch(patched, /let\[,l,u,d,f\]=c/);
+  assert.doesNotMatch(patched, /this\.codexLinuxIsI3Session\(\)\)\{this\.codexLinuxStopAvatarPassthroughRecovery\(\),this\.codexLinuxAvatarInputShapeKey=null,this\.pointerInteractive=!0,this\.mousePassthroughEnabled&&\(this\.mousePassthroughEnabled=!1\),e\.setIgnoreMouseEvents\(!1\);return\}/);
+  assert.match(patched, /if\(process\.platform===`linux`&&typeof e\.setShape==`function`\)\{/);
+  assert.doesNotMatch(patched, /typeof e\.setShape==`function`&&!this\.codexLinuxIsI3Session\(\)/);
   assert.match(patched, /if\(t==null\)return null/);
   assert.match(patched, /if\(t==null\)return!1;let n=JSON\.stringify\(t\)/);
   assert.match(patched, /e\.setShape\(t\),this\.codexLinuxAvatarInputShapeKey=n;return!0/);
@@ -319,10 +638,37 @@ test("adds Linux avatar overlay mouse passthrough recovery", () => {
   assert.match(patched, /displayBounds:n\.screen\.getDisplayNearestPoint\(n\.screen\.getCursorScreenPoint\(\)\)\.bounds\},process\.platform===`linux`&&\(this\.pointerInteractive=!0,this\.applyPointerInteractivityPolicy\(\)\)\}moveDrag\(e\)/);
   assert.match(patched, /this\.dragState=null,this\.reclampWindowToVisibleDisplay\(\{shouldPersist:!0\}\),process\.platform===`linux`&&this\.applyPointerInteractivityPolicy\(\)/);
   assert.match(patched, /this\.applyLayout\(r\),process\.platform===`linux`&&this\.applyPointerInteractivityPolicy\(\)/);
+  assert.match(patched, /this\.codexLinuxAvatarCompositorHintsApplied=!1,this\.codexLinuxAvatarCompositorHintsApplying=!1,this\.rendererReady=/);
+  assert.match(patched, /traySize:process\.platform===`linux`&&typeof this\.codexLinuxIsI3Session==`function`&&this\.codexLinuxIsI3Session\(\)\?this\.traySize:this\.traySize\?\?sV/);
   assert.match(patched, /this\.setWindowBounds\(e,r\.windowBounds\),this\.sendLayoutToRenderer\(e\),process\.platform===`linux`&&this\.applyPointerInteractivityPolicy\(\)/);
-  assert.match(patched, /e\.moveTop\(\),e\.showInactive\(\),process\.platform===`linux`&&this\.applyPointerInteractivityPolicy\(\)/);
+  assert.match(patched, /e\.moveTop\(\),e\.showInactive\(\),process\.platform===`linux`&&this\.codexLinuxApplyAvatarCompositorHints\(e\),process\.platform===`linux`&&this\.applyPointerInteractivityPolicy\(\)/);
   assert.doesNotMatch(patched, /codexLinuxRecoverAvatarPointerInteractivity/);
-  assert.match(patched, /this\.window===t&&\(this\.codexLinuxStopAvatarPassthroughRecovery\(\),this\.codexLinuxAvatarInputShapeKey=null,this\.cancelMomentum\(\)/);
+  assert.match(patched, /this\.window===t&&\(this\.codexLinuxStopAvatarPassthroughRecovery\(\),this\.codexLinuxAvatarInputShapeKey=null,this\.codexLinuxAvatarCompositorHintsApplied=!1,this\.codexLinuxAvatarCompositorHintsApplying=!1,this\.cancelMomentum\(\)/);
+});
+
+test("upgrades older i3 avatar compositor hint patches", () => {
+  const source =
+    "let u=require(`node:child_process`);class A{createWindow(){let t={webContents:{id:1}};return this.window=t,this.codexLinuxApplyAvatarCompositorHints(t),this.rendererReady=this.windowManager.isWebContentsReady(t.webContents.id),t}codexLinuxIsI3Session(){let e=[process.env.XDG_CURRENT_DESKTOP,process.env.DESKTOP_SESSION,process.env.I3SOCK].filter(Boolean).join(`:`).toLowerCase();return/(^|[:;/])i3([:;/.-]|$)/.test(e)}codexLinuxApplyAvatarCompositorHints(e){if(process.platform!==`linux`||!this.codexLinuxIsI3Session()||this.codexLinuxAvatarCompositorHintsApplied||e==null||e.isDestroyed()||!process.env.DISPLAY)return;let t=null;try{let n=e.getNativeWindowHandle?.();n!=null&&n.length>=4&&(t=n.readUInt32LE(0))}catch{}if(!Number.isFinite(t)||t<=0)return;this.codexLinuxAvatarCompositorHintsApplied=!0;try{u.execFile(`xprop`,[`-id`,String(t),`-f`,`_GTK_FRAME_EXTENTS`,`32c`,`-set`,`_GTK_FRAME_EXTENTS`,`0, 0, 0, 0`],{timeout:1e3},e=>{e&&(this.codexLinuxAvatarCompositorHintsApplied=!1)})}catch{this.codexLinuxAvatarCompositorHintsApplied=!1}}codexLinuxStopAvatarPassthroughRecovery(){}}";
+  const patched = applyPatchTwice(applyLinuxAvatarOverlayMousePassthroughPatch, source);
+
+  assert.match(patched, /u\.execFile\(`xdotool`,\[`search`,`--pid`,String\(process\.pid\)\]/);
+  assert.match(patched, /u\.execFile\(`xwininfo`,\[`-id`,e\]/);
+  assert.match(patched, /Override Redirect State/);
+  assert.match(patched, /this\.window=t,this\.codexLinuxAvatarCompositorHintsApplied=!1,this\.codexLinuxAvatarCompositorHintsApplying=!1,this\.rendererReady=/);
+  assert.doesNotMatch(patched, /let t=null;try\{let n=e\.getNativeWindowHandle/);
+  assert.doesNotMatch(patched, /this\.window=t,this\.codexLinuxApplyAvatarCompositorHints\(t\),this\.rendererReady=/);
+});
+
+test("upgrades intermediate i3 avatar compositor hint patches", () => {
+  const source =
+    "let u=require(`node:child_process`);class A{createWindow(){let t={webContents:{id:1}};return this.window=t,this.codexLinuxAvatarCompositorHintsApplied=!1,process.platform===`linux`&&this.codexLinuxApplyAvatarCompositorHints(t),this.rendererReady=this.windowManager.isWebContentsReady(t.webContents.id),t}codexLinuxIsI3Session(){let e=[process.env.XDG_CURRENT_DESKTOP,process.env.DESKTOP_SESSION,process.env.I3SOCK].filter(Boolean).join(`:`).toLowerCase();return/(^|[:;/])i3([:;/.-]|$)/.test(e)}codexLinuxApplyAvatarCompositorHints(e){if(process.platform!==`linux`||!this.codexLinuxIsI3Session()||this.codexLinuxAvatarCompositorHintsApplied||e==null||e.isDestroyed()||!process.env.DISPLAY)return;let t=[];try{let n=e.getNativeWindowHandle?.();n!=null&&n.length>=4&&t.push(String(n.readUInt32LE(0)))}catch{}this.codexLinuxAvatarCompositorHintsApplying=!0;let n=e=>{let t=[...new Set(e)].filter(e=>/^[0-9]+$/.test(e)&&e!==`0`);if(t.length===0){this.codexLinuxAvatarCompositorHintsApplying=!1;return}let n=t.length,r=!1,i=()=>{n--,n===0&&(this.codexLinuxAvatarCompositorHintsApplying=!1,r&&(this.codexLinuxAvatarCompositorHintsApplied=!0))};for(let a of t)try{u.execFile(`xprop`,[`-id`,a,`-f`,`_GTK_FRAME_EXTENTS`,`32c`,`-set`,`_GTK_FRAME_EXTENTS`,`0, 0, 0, 0`],{timeout:1e3},e=>{e||(r=!0),i()})}catch{i()}};try{u.execFile(`xdotool`,[`search`,`--pid`,String(process.pid)],{timeout:1e3},(e,r)=>{n([...t,...String(r??``).trim().split(/\\s+/).filter(Boolean)])})}catch{n(t)}}codexLinuxStopAvatarPassthroughRecovery(){}}";
+  const patched = applyPatchTwice(applyLinuxAvatarOverlayMousePassthroughPatch, source);
+
+  assert.match(patched, /this\.window=t,this\.codexLinuxAvatarCompositorHintsApplied=!1,this\.codexLinuxAvatarCompositorHintsApplying=!1,this\.rendererReady=/);
+  assert.match(patched, /u\.execFile\(`xwininfo`,\[`-id`,e\]/);
+  assert.match(patched, /Override Redirect State/);
+  assert.doesNotMatch(patched, /this\.codexLinuxAvatarCompositorHintsApplied=!1,process\.platform===`linux`&&this\.codexLinuxApplyAvatarCompositorHints\(t\),this\.rendererReady=/);
+  assert.doesNotMatch(patched, /for\(let a of t\)try\{u\.execFile\(`xprop`/);
 });
 
 test("adds Linux window icon handling when an icon asset is available", () => {
@@ -525,7 +871,10 @@ test("adds Linux launch actions when captured window identifiers contain dollar 
   assert.match(patched, /codexLinuxHandleLaunchActionArgs/);
   assert.match(patched, /z\.navigateToRoute\(r\$,e\),ae\(r\$\)/);
   assert.match(patched, /codexLinuxQuitInProgress=!1/);
+  assert.match(patched, /codexLinuxExplicitQuitApproved=!1/);
   assert.match(patched, /codexLinuxMarkQuitInProgress=\(\)=>\{codexLinuxQuitInProgress=!0\}/);
+  assert.match(patched, /codexLinuxPrepareForExplicitQuit=\(\)=>\{codexLinuxExplicitQuitApproved=!0,codexLinuxMarkQuitInProgress\(\)\}/);
+  assert.match(patched, /codexLinuxShouldBypassQuitPrompt=\(\)=>codexLinuxExplicitQuitApproved===!0/);
   assert.match(patched, /codexLinuxIsQuitInProgress=\(\)=>codexLinuxQuitInProgress===!0/);
   assert.match(patched, /codexLinuxGetSetting=e=>/);
   assert.match(patched, /codexLinuxHandleLaunchActionArgs=async e=>/);
@@ -667,7 +1016,7 @@ test("adds Linux package updater behind the existing app updater manager", () =>
   assert.match(patched, /function codexLinuxReadUpdateState\(\)/);
   assert.match(patched, /function codexLinuxUpdateLifecycleState\(e\)/);
   assert.match(patched, /function codexLinuxUpdateManagerPath\(\)/);
-  assert.match(patched, /async function codexLinuxShowUpdateMessage\(e,n\)/);
+  assert.match(patched, /async function codexLinuxShowUpdateMessage\(codexLinuxMessage,codexLinuxDetail\)/);
   assert.match(patched, /function codexLinuxInstallAfterQuit\(\)/);
   assert.match(patched, /function codexLinuxQuitForUpdate\(\)/);
   assert.match(patched, /t\.dialog\?\.showMessageBox\(\{type:`info`/);
@@ -682,7 +1031,12 @@ test("adds Linux package updater behind the existing app updater manager", () =>
   assert.match(patched, /t\.app\?\.quit\?\.\(\)/);
   assert.match(patched, /t\.app\?\.exit\?\.\(0\)/);
   assert.match(patched, /execFile\(codexLinuxUpdateManagerPath\(\),e/);
+  assert.match(patched, /async function codexLinuxProbeUpdateManager\(\)/);
   assert.match(patched, /codexLinuxRunUpdateManager\(\[`--help`\]\)/);
+  assert.match(patched, /async function codexLinuxRefreshUpdateState\(\)/);
+  assert.match(patched, /async function codexLinuxRefreshUpdateState\(\)\{return codexLinuxReadUpdateState\(\)\}/);
+  assert.doesNotMatch(patched, /codexLinuxRunUpdateManager\(\[`status`,`--json`\]\)/);
+  assert.match(patched, /await codexLinuxProbeUpdateManager\(\),e\(\)/);
   assert.match(patched, /if\(!this\.options\.enableUpdater&&process\.platform!==`linux`\)/);
   assert.match(patched, /process\.platform===`linux`\?await this\.initializeLinuxPackageUpdater\(\)/);
   assert.match(patched, /async initializeLinuxPackageUpdater\(\)/);
@@ -693,6 +1047,138 @@ test("adds Linux package updater behind the existing app updater manager", () =>
   assert.doesNotMatch(patched, /this\.options\.onInstallUpdatesRequested\?\.\(\)/);
   assert.match(patched, /n\.stdout\?\.includes\(`already installed`\)\?await codexLinuxShowUpdateMessage/);
   assert.match(patched, /if\(t\?\.status===`waiting_for_app_exit`\)/);
+});
+
+test("does not run bootstrap probe-state migration on class-style updater bundles", () => {
+  const source = `function unrelated(){i();let o=1;return o}${appUpdaterBundleFixture()}`;
+  const patched = applyPatchTwice(applyLinuxAppUpdaterBridgePatch, source);
+
+  assert.match(patched, /function unrelated\(\)\{i\(\);let o=1;return o\}/);
+  assert.match(patched, /await codexLinuxProbeUpdateManager\(\),e\(\)/);
+  assert.doesNotMatch(patched, /let s=!1,c=codexLinuxProbeUpdateManager/);
+  assert.doesNotMatch(patched, /getIsUpdateReady:\(\)=>s&&t/);
+});
+
+test("adds Linux package updater to current bootstrap updater wiring", () => {
+  const patched = applyPatchTwice(applyLinuxAppUpdaterBridgePatch, currentBootstrapUpdaterBundleFixture());
+
+  assert.match(patched, /function codexLinuxCreatePackageUpdateManager\(/);
+  assert.match(patched, /codexLinuxPackageUpdateBridge=process\.platform===`linux`/);
+  assert.match(patched, /send:e=>M\.sendMessageToAllRegisteredWindows\(e\)/);
+  assert.doesNotMatch(patched, /send:e=>a\.sendMessageToAllRegisteredWindows\(e\)/);
+  assert.match(patched, /s=codexLinuxPackageUpdateBridge\.manager/);
+  assert.match(patched, /te=codexLinuxPackageUpdateBridge\.quitForUpdate/);
+  assert.match(patched, /async function codexLinuxProbeUpdateManager\(\)/);
+  assert.match(patched, /codexLinuxRunUpdateManager\(\[`--help`\]\)/);
+  assert.match(patched, /async function codexLinuxRefreshUpdateState\(\)\{return codexLinuxReadUpdateState\(\)\}/);
+  assert.match(patched, /codexLinuxProbeUpdateManager\(\)\.then\(\(\)=>\{s=!0,i\(\),a\(\);return!0\}\)/);
+  assert.match(patched, /getIsUpdateReady:\(\)=>s&&t/);
+  assert.match(patched, /checkForUpdates:async\(\)=>\{if\(!await c\)return;n=`checking`/);
+  assert.match(patched, /installUpdatesIfAvailable:async\(\)=>\{if\(!await c\)\{a\(\);return\}i\(\);if\(!t\)\{a\(\);return\}/);
+  assert.match(patched, /refresh:async\(\)=>\{if\(await c\)\{try\{await codexLinuxRefreshUpdateState\(\)\}/);
+  assert.doesNotMatch(patched, /codexLinuxRunUpdateManager\(\[`status`,`--json`\]\)/);
+});
+
+test("migrates already-patched bootstrap updater bridge to probe before enabling UI", () => {
+  const patched = applyLinuxAppUpdaterBridgePatch(currentBootstrapUpdaterBundleFixture());
+  const oldPatched = patched
+    .replace(
+      "let s=!1,c=codexLinuxProbeUpdateManager().then(()=>{s=!0,i(),a();return!0}).catch(()=>{s=!1,t=!1,n=`idle`,a();return!1});let o=",
+      "i(),codexLinuxRefreshUpdateState().then(()=>{i(),a()}).catch(()=>{});let o=",
+    )
+    .replace(
+      "getIsUpdateReady:()=>s&&t,getUpdateLifecycleState:()=>s?n:`idle`,",
+      "getIsUpdateReady:()=>t,getUpdateLifecycleState:()=>n,",
+    )
+    .replace(
+      "checkForUpdates:async()=>{if(!await c)return;n=`checking`,a();try{",
+      "checkForUpdates:async()=>{n=`checking`,a();try{",
+    )
+    .replace(
+      "installUpdatesIfAvailable:async()=>{if(!await c){a();return}i();if(!t){a();return}",
+      "installUpdatesIfAvailable:async()=>{i();if(!t)return;",
+    )
+    .replace(
+      "refresh:async()=>{if(await c){try{await codexLinuxRefreshUpdateState()}catch{}i()}else t=!1,n=`idle`;a()}",
+      "refresh:async()=>{try{await codexLinuxRefreshUpdateState()}catch{}i(),a()}",
+    );
+
+  const migrated = applyPatchTwice(applyLinuxAppUpdaterBridgePatch, oldPatched);
+
+  assert.match(migrated, /codexLinuxProbeUpdateManager\(\)\.then\(\(\)=>\{s=!0,i\(\),a\(\);return!0\}\)/);
+  assert.match(migrated, /getIsUpdateReady:\(\)=>s&&t/);
+  assert.match(migrated, /installUpdatesIfAvailable:async\(\)=>\{if\(!await c\)\{a\(\);return\}i\(\);if\(!t\)\{a\(\);return\}/);
+});
+
+test("migrates previous bootstrap updater bridge without leaving undefined probe state", () => {
+  const patched = applyLinuxAppUpdaterBridgePatch(currentBootstrapUpdaterBundleFixture());
+  const oldPatched = patched
+    .replace(
+      "async function codexLinuxProbeUpdateManager(){await codexLinuxRunUpdateManager([`--help`])}",
+      "",
+    )
+    .replace(
+      "async function codexLinuxRefreshUpdateState(){return codexLinuxReadUpdateState()}",
+      "",
+    )
+    .replace(
+      ",s=!1,c=codexLinuxProbeUpdateManager().then(()=>{s=!0,i(),a();return!0}).catch(()=>{s=!1,t=!1,n=`idle`,a();return!1});let o=",
+      ";i();let o=",
+    )
+    .replace(
+      "getIsUpdateReady:()=>s&&t,getUpdateLifecycleState:()=>s?n:`idle`,",
+      "getIsUpdateReady:()=>t,getUpdateLifecycleState:()=>n,",
+    )
+    .replace(
+      "checkForUpdates:async()=>{if(!await c)return;n=`checking`,a();try{",
+      "checkForUpdates:async()=>{n=`checking`,a();try{",
+    )
+    .replace(
+      "installUpdatesIfAvailable:async()=>{if(!await c){a();return}i();if(!t){a();return}",
+      "installUpdatesIfAvailable:async()=>{i();if(!t)return;",
+    )
+    .replace(
+      "refresh:async()=>{if(await c){try{await codexLinuxRefreshUpdateState()}catch{}i()}else t=!1,n=`idle`;a()}",
+      "refresh:()=>{i(),a()}",
+    );
+
+  assert.doesNotMatch(oldPatched, /codexLinuxProbeUpdateManager/);
+  assert.doesNotMatch(oldPatched, /codexLinuxRefreshUpdateState/);
+  assert.match(oldPatched, /i\(\);let o=/);
+
+  const migrated = applyPatchTwice(applyLinuxAppUpdaterBridgePatch, oldPatched);
+
+  assert.match(migrated, /async function codexLinuxProbeUpdateManager\(\)\{await codexLinuxRunUpdateManager\(\[`--help`\]\)\}/);
+  assert.match(migrated, /async function codexLinuxRefreshUpdateState\(\)\{return codexLinuxReadUpdateState\(\)\}/);
+  assert.match(migrated, /let s=!1,c=codexLinuxProbeUpdateManager\(\)\.then/);
+  assert.match(migrated, /getIsUpdateReady:\(\)=>s&&t/);
+  assert.match(migrated, /checkForUpdates:async\(\)=>\{if\(!await c\)return;n=`checking`/);
+  assert.match(migrated, /installUpdatesIfAvailable:async\(\)=>\{if\(!await c\)\{a\(\);return\}i\(\);if\(!t\)\{a\(\);return\}/);
+  assert.match(migrated, /refresh:async\(\)=>\{if\(await c\)\{try\{await codexLinuxRefreshUpdateState\(\)\}/);
+});
+
+test("migrates already-patched Linux updater bridge to probe without mutating refresh", () => {
+  const patched = applyLinuxAppUpdaterBridgePatch(appUpdaterBundleFixture());
+  const oldPatched = patched
+    .replace(
+      "async function codexLinuxProbeUpdateManager(){await codexLinuxRunUpdateManager([`--help`])}",
+      "",
+    )
+    .replace(
+      "async function codexLinuxRefreshUpdateState(){return codexLinuxReadUpdateState()}",
+      "async function codexLinuxRefreshUpdateState(){await codexLinuxRunUpdateManager([`status`,`--json`]);return codexLinuxReadUpdateState()}",
+    )
+    .replace(
+      "await codexLinuxProbeUpdateManager(),e()",
+      "await codexLinuxRefreshUpdateState(),e()",
+    );
+
+  const migrated = applyPatchTwice(applyLinuxAppUpdaterBridgePatch, oldPatched);
+
+  assert.match(migrated, /async function codexLinuxProbeUpdateManager\(\)\{await codexLinuxRunUpdateManager\(\[`--help`\]\)\}/);
+  assert.match(migrated, /async function codexLinuxRefreshUpdateState\(\)\{return codexLinuxReadUpdateState\(\)\}/);
+  assert.match(migrated, /await codexLinuxProbeUpdateManager\(\),e\(\)/);
+  assert.doesNotMatch(migrated, /codexLinuxRunUpdateManager\(\[`status`,`--json`\]\)/);
 });
 
 test("migrates an already-patched Linux updater bridge to quit before install", () => {
@@ -859,16 +1345,70 @@ test("patches the current Computer Use gate without touching the Windows-interna
 });
 
 test("patches the current isAvailable Computer Use gate shape", () => {
-  const source = [
-    "var lt=`browser-use`,ut=`chrome`,dt=`chrome-internal`,ft=`computer-use`,pt=`latex-tectonic`;",
-    "var Kr=[{forceReload:!0,installWhenMissing:!0,name:lt,isAvailable:({features:e})=>e.inAppBrowserUseAllowed,migrate:rr},{forceReload:!0,name:dt,isAvailable:({buildFlavor:e,features:t})=>Qn(e)&&t.externalBrowserUseAllowed},{forceReload:!0,name:ut,isAvailable:({buildFlavor:e,features:t})=>t.externalBrowserUseAllowed&&$n(e)},{name:ft,isAvailable:({features:e,platform:t})=>t===`darwin`&&e.computerUse,migrate:vr},{installWhenMissing:!0,name:ft,isAvailable:({buildFlavor:e,features:n,platform:r})=>t.T.isInternal(e)&&r===`win32`&&n.computerUse},{name:pt,isAvailable:()=>!0}];",
-  ].join("");
+  const source = currentPluginGateBundleFixture();
 
   const patched = applyPatchTwice(applyLinuxComputerUsePluginGatePatch, source);
 
   assert.match(patched, /name:ft,isAvailable:\(\{features:e,platform:t\}\)=>\(t===`darwin`\|\|t===`linux`\)&&e\.computerUse,migrate:vr/);
   assert.match(patched, /t\.T\.isInternal\(e\)&&r===`win32`&&n\.computerUse/);
   assert.equal((patched.match(/installWhenMissing:!0,name:ft/g) || []).length, 2);
+});
+
+test("auto-installs the current Chrome plugin gate shape", () => {
+  const patched = applyPatchTwice(
+    applyLinuxChromePluginAutoInstallPatch,
+    currentPluginGateBundleFixture(),
+  );
+
+  assert.match(
+    patched,
+    /\{forceReload:!0,installWhenMissing:!0,name:ut,isAvailable:\(\{buildFlavor:e,features:t\}\)=>t\.externalBrowserUseAllowed&&\$n\(e\)\}/,
+  );
+  assert.match(patched, /name:dt,isAvailable:\(\{buildFlavor:e,features:t\}\)=>Qn\(e\)&&t\.externalBrowserUseAllowed/);
+  assert.equal((patched.match(/installWhenMissing:!0,name:ut/g) || []).length, 1);
+  assert.equal((patched.match(/installWhenMissing:!0,name:dt/g) || []).length, 0);
+});
+
+test("keeps an already auto-installed Chrome plugin gate unchanged", () => {
+  const source = currentPluginGateBundleFixture().replace(
+    "{forceReload:!0,name:ut,isAvailable:",
+    "{forceReload:!0,installWhenMissing:!0,name:ut,isAvailable:",
+  );
+
+  assert.equal(applyPatchTwice(applyLinuxChromePluginAutoInstallPatch, source), source);
+});
+
+test("handles literal Chrome plugin gate names", () => {
+  const source =
+    "var Kr=[{forceReload:!0,name:'chrome',isEnabled:({features:t})=>t.externalBrowserUseAllowed},{forceReload:!0,name:'chrome-internal',isEnabled:({features:t})=>t.externalBrowserUseAllowed}];";
+
+  const patched = applyPatchTwice(applyLinuxChromePluginAutoInstallPatch, source);
+
+  assert.match(patched, /installWhenMissing:!0,name:'chrome'/);
+  assert.doesNotMatch(patched, /installWhenMissing:!0,name:'chrome-internal'/);
+});
+
+test("reports missing required Chrome plugin auto-install gate as upstream validation failure", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-patch-report-missing-chrome-"));
+  try {
+    const buildDir = path.join(tempRoot, ".vite", "build");
+    fs.mkdirSync(buildDir, { recursive: true });
+    fs.writeFileSync(path.join(buildDir, "main.js"), `${mainBundlePrefix}var plugins=[];`);
+
+    const report = createPatchReport();
+    captureWarns(() => patchExtractedApp(tempRoot, { report }));
+
+    const pluginGatePatch = report.patches.find((patch) => patch.name === "linux-chrome-plugin-auto-install");
+    assert.equal(pluginGatePatch.status, "skipped-optional");
+    assert.match(pluginGatePatch.reason, /Could not find Chrome plugin gate literal/);
+    assert.ok(
+      validateReport(report, "upstream-build").some((failure) =>
+        failure.startsWith("linux-chrome-plugin-auto-install: skipped-optional"),
+      ),
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test("patches Computer Use gates that use imported namespace constants", () => {
@@ -986,6 +1526,66 @@ test("auto-approves the app-provided Browser Use node_repl bridge", () => {
 
   assert.match(patched, /tools:\{js:\{approval_mode:`approve`\}\}/);
   assert.match(patched, /env:\{\[dt\]:l,\[ft\]:i\.nodePath/);
+});
+
+test("shows the Linux IAB panel after Browser Use creates or reuses a tab", () => {
+  const source =
+    "var CF=class{async createTabForBrowserUse(e){let t=this.getActiveBrowserUseTab(e,{assertCurrentPageAllowed:!1});if(t!=null)return await this.navigateTabToInitialPage(t),this.serializeTab(t);let n=this.getRequiredBrowserHost(e);n.setBrowserUseActive(!0,e.turnId);let r=await n.openPageForBrowserUse({startingUrl:this.initialPageUrl,turnId:e.turnId}),i=this.updateTabForPage(r,n.routeKey);return SF().info(`IAB_LIFECYCLE iab createTab mapped page to tab`,{}),this.markBrowserUseCommandForTab(e,i),this.selectedTabIdsByRouteKey.set(n.routeKey,i.cdpTabId),this.serializeTab(i)}};";
+
+  const patched = applyPatchTwice(applyLinuxBrowserUseIabVisibleOnCreatePatch, source);
+
+  assert.match(
+    patched,
+    /this\.getRequiredBrowserHost\(e\)\.setBrowserVisibleForBrowserUse\(!0,e\.turnId\)/,
+  );
+  assert.match(patched, /n\.setBrowserVisibleForBrowserUse\(!0,e\.turnId\)/);
+  assert.match(patched, /codexLinuxBrowserUseAutoVisible/);
+  assert.match(
+    patched,
+    /return \(\(\)=>\{try\{n\.setBrowserVisibleForBrowserUse\(!0,e\.turnId\)\}/,
+  );
+});
+
+test("detects Chrome extension installation from Linux browser profiles", () => {
+  const patched = applyPatchTwice(
+    applyLinuxChromeExtensionStatusPatch,
+    chromeExtensionStatusBundleFixture(),
+  );
+
+  assert.match(patched, /function codexLinuxChromeProfileRoots/);
+  assert.match(patched, /`BraveSoftware`,`Brave-Browser`/);
+  assert.match(patched, /`google-chrome-unstable`/);
+  assert.match(
+    patched,
+    /if\(a===`linux`\)return codexLinuxChromeHasExtension\(\{extensionId:e,homeDir:t,platform:a\}\)/,
+  );
+  assert.match(
+    patched,
+    /if\(t===`linux`\)\{let t=codexLinuxChromeCommand\(\)\?\?n\(\);if\(t==null\)throw Error\(`Google Chrome, Brave, or Chromium is not installed`\);await r\(t,\[cm\(e\)\]\);return\}/,
+  );
+  assert.match(patched, /process\.env\.PATH\?\?``/);
+  assert.doesNotMatch(patched, /function codexLinuxChromeCommand\(\)\{for\(let e of\[[^\]]+\]\)\{let t=Rp/);
+});
+
+test("detects Chrome extension installation after upstream minifier renames", () => {
+  const patched = applyPatchTwice(
+    applyLinuxChromeExtensionStatusPatch,
+    currentChromeExtensionStatusBundleFixture(),
+  );
+
+  assert.match(patched, /function codexLinuxChromeProfileRoots/);
+  assert.match(patched, /let r=um\(e\);for\(let e of codexLinuxChromeProfileRoots/);
+  assert.match(patched, /function om\(\{extensionId:e,homeDir:t=\(0,r\.homedir\)\(\)/);
+  assert.match(patched, /c=dm\(\{homeDir:t,localAppDataDir:n,platform:a\}\)/);
+  assert.match(
+    patched,
+    /async function sm\(\{extensionId:e,platform:t=process\.platform,detectChromeCommand:n=cm,runCommand:r=zp\}\)/,
+  );
+  assert.match(patched, /await r\(rm,\[`-b`,nm,am\(e\)\]\)/);
+  assert.match(
+    patched,
+    /if\(t===`linux`\)\{let t=codexLinuxChromeCommand\(\)\?\?n\(\);if\(t==null\)throw Error\(`Google Chrome, Brave, or Chromium is not installed`\);await r\(t,\[am\(e\)\]\);return\}/,
+  );
 });
 
 function withIsolatedHome(body) {
@@ -1161,7 +1761,9 @@ test("patchMainBundleSource keeps non-icon patches active without an icon asset"
   const patched = applyPatchTwice(patchMainBundleSource, source, null);
 
   assert.match(patched, /codexLinuxQuitInProgress=!1/);
+  assert.match(patched, /codexLinuxExplicitQuitApproved=!1/);
   assert.match(patched, /codexLinuxIsQuitInProgress=\(\)=>codexLinuxQuitInProgress===!0/);
+  assert.match(patched, /codexLinuxShouldBypassQuitPrompt=\(\)=>codexLinuxExplicitQuitApproved===!0/);
   assert.match(patched, /n\.app\.on\(`before-quit`,codexLinuxBeforeQuitHandler\)/);
   assert.match(patched, /process\.platform===`linux`&&k\.setMenuBarVisibility\(!1\)/);
   assert.match(patched, /linux:\{label:`File Manager`/);
@@ -1303,10 +1905,6 @@ test("patchExtractedApp records a structured patch report", () => {
       ].join(""),
     );
     fs.writeFileSync(path.join(assetsDir, "app-test.png"), "");
-    fs.writeFileSync(
-      path.join(assetsDir, "code-theme-test.js"),
-      "opaqueWindows:e?.opaqueWindows??n.opaqueWindows,semanticColors:",
-    );
     fs.writeFileSync(path.join(tempRoot, "package.json"), JSON.stringify({ name: "codex" }));
 
     const report = createPatchReport();
@@ -1316,7 +1914,6 @@ test("patchExtractedApp records a structured patch report", () => {
     assert.equal(report.iconAsset, "app-test.png");
     assert.equal(report.desktopName, "codex-desktop.desktop");
     assert.ok(report.patches.some((patch) => patch.name === "main-process-ui" && patch.status === "applied"));
-    assert.ok(report.patches.some((patch) => patch.name === "opaque-window-default-code-theme" && patch.status === "applied"));
     assert.ok(report.patches.some((patch) => patch.name === "keybinds-settings" && patch.status === "skipped-optional"));
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });

@@ -1,6 +1,6 @@
 use crate::windowing::registry::{self, WINDOW_PERMISSION_HINT};
 use crate::windowing::types::{WindowFocusResult, WindowInfo, WindowTarget};
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use tokio::time::{sleep, Duration};
 
 const FOCUS_VERIFY_ATTEMPTS: usize = 6;
@@ -95,10 +95,7 @@ pub fn resolve_window_target<'a>(
     target: &WindowTarget,
 ) -> Result<&'a WindowInfo> {
     if let Some(window_id) = target.window_id {
-        return windows
-            .iter()
-            .find(|window| window.window_id == window_id)
-            .with_context(|| format!("No window matched window_id {window_id}."));
+        return resolve_window_id_target(windows, window_id);
     }
 
     if target.has_terminal_target() {
@@ -159,6 +156,37 @@ pub fn resolve_window_target<'a>(
     }
 
     bail!("Pass window_id, pid, app_id, wm_class, title, tty, terminal_pid, terminal_command, or terminal_cwd to target a window.");
+}
+
+fn resolve_window_id_target(windows: &[WindowInfo], window_id: u64) -> Result<&WindowInfo> {
+    if let Some(window) = windows.iter().find(|window| window.window_id == window_id) {
+        return Ok(window);
+    }
+
+    let matches = windows
+        .iter()
+        .filter(|window| window_id_matches_json_number(window.window_id, window_id))
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [window] => Ok(*window),
+        [] => Err(anyhow::anyhow!("No window matched window_id {window_id}.")),
+        windows => {
+            let ids = windows
+                .iter()
+                .map(|window| window.window_id.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            bail!(
+                "window_id {window_id} matched multiple windows after JSON number rounding ({ids}); add title, pid, app_id, or wm_class to disambiguate."
+            );
+        }
+    }
+}
+
+fn window_id_matches_json_number(actual: u64, requested: u64) -> bool {
+    const JS_SAFE_INTEGER_MAX: u64 = (1_u64 << 53) - 1;
+    (actual > JS_SAFE_INTEGER_MAX || requested > JS_SAFE_INTEGER_MAX)
+        && (actual as f64) == (requested as f64)
 }
 
 fn unique_window_match<'a>(

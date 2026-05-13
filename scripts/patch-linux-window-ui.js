@@ -6,10 +6,24 @@ const {
   writePatchReport,
 } = require("./lib/patch-report.js");
 const {
+  enabledLinuxFeatureIds,
+  enabledLinuxFeatureStageHooks,
+  loadEnabledLinuxFeatures,
+  loadLinuxFeatureMainBundlePatches,
+} = require("./lib/linux-features.js");
+const {
+  detectLinuxTargetContext,
+  linuxTargetSummary,
+  parseOsRelease,
+} = require("./lib/linux-target-context.js");
+const {
   applyLinuxAppUpdaterBridgePatch,
   applyLinuxAppUpdaterMenuPatch,
   patchLinuxAppUpdaterBridge,
 } = require("./lib/linux-update-bridge-patch.js");
+const {
+  applyLinuxChromePluginAutoInstallPatch,
+} = require("./patches/chrome-plugin.js");
 const {
   COMPUTER_USE_UI_ENV_VAR,
   COMPUTER_USE_UI_SETTINGS_KEY,
@@ -34,9 +48,11 @@ const {
   applyLinuxTrayCloseSettingPatch,
 } = require("./patches/launch-actions.js");
 const {
-  applyLinuxAvatarOverlayMousePassthroughPatch,
   applyBrowserUseNodeReplApprovalPatch,
+  applyLinuxBrowserUseIabVisibleOnCreatePatch,
+  applyLinuxChromeExtensionStatusPatch,
   applyLinuxExplicitIpcQuitPatch,
+  applyLinuxExplicitQuitPromptBypassPatch,
   applyLinuxExplicitTrayQuitPatch,
   applyLinuxFileManagerPatch,
   applyLinuxGitOriginsSourceFallbackPatch,
@@ -46,13 +62,24 @@ const {
   applyLinuxSetIconPatch,
   applyLinuxSingleInstancePatch,
   applyLinuxTrayPatch,
+  applyLinuxWillQuitDrainTimeoutPatch,
   applyLinuxWindowOptionsPatch,
 } = require("./patches/main-process.js");
+const {
+  applyLinuxAvatarOverlayMousePassthroughPatch,
+} = require("./patches/avatar-overlay.js");
 const {
   patchPackageJson,
   resolveDesktopName,
 } = require("./patches/package-json.js");
 const {
+  discoverCorePatchDescriptors,
+  normalizePatchDescriptors,
+} = require("./patches/engine.js");
+const {
+  corePatchDescriptors,
+  createMainBundleContext,
+  legacyCorePatchDescriptors,
   patchExtractedApp,
   patchMainBundleSource,
 } = require("./patches/registry.js");
@@ -113,11 +140,15 @@ module.exports = {
   applyLinuxAppUpdaterBridgePatch,
   applyLinuxAppUpdaterMenuPatch,
   applyLinuxAvatarOverlayMousePassthroughPatch,
+  applyLinuxBrowserUseIabVisibleOnCreatePatch,
+  applyLinuxChromeExtensionStatusPatch,
+  applyLinuxChromePluginAutoInstallPatch,
   applyLinuxComputerUseFeaturePatch,
   applyLinuxComputerUseInstallFlowPatch,
   applyLinuxComputerUsePluginGatePatch,
   applyLinuxComputerUseRendererAvailabilityPatch,
   applyLinuxExplicitIpcQuitPatch,
+  applyLinuxExplicitQuitPromptBypassPatch,
   applyLinuxExplicitTrayQuitPatch,
   applyLinuxFileManagerPatch,
   applyLinuxGitOriginsSourceFallbackPatch,
@@ -133,9 +164,22 @@ module.exports = {
   applyLinuxSingleInstancePatch,
   applyLinuxTrayCloseSettingPatch,
   applyLinuxTrayPatch,
+  applyLinuxWillQuitDrainTimeoutPatch,
   applyLinuxWindowOptionsPatch,
   createPatchReport,
+  corePatchDescriptors,
+  createMainBundleContext,
+  detectLinuxTargetContext,
+  discoverCorePatchDescriptors,
+  enabledLinuxFeatureIds,
+  enabledLinuxFeatureStageHooks,
   isComputerUseUiEnabled,
+  legacyCorePatchDescriptors,
+  linuxTargetSummary,
+  loadEnabledLinuxFeatures,
+  loadLinuxFeatureMainBundlePatches,
+  normalizePatchDescriptors,
+  parseOsRelease,
   patchCommentPreloadBundle,
   patchExtractedApp,
   patchKeybindsSettingsAssets,

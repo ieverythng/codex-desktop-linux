@@ -1,5 +1,5 @@
 #!/bin/bash
-# Bundled-plugin staging — Linux Computer Use backend build, plugin manifest, marketplace.
+# Bundled-plugin staging — Browser Use, Chrome, Linux Computer Use, manifests, marketplace.
 #
 # Sourced by install.sh. Do not run directly.
 # shellcheck shell=bash
@@ -130,14 +130,23 @@ install_linux_executable_resource() {
     local source="$1"
     local destination="$2"
     local label="$3"
+    local log_level="${4:-warn}"
 
     if [ ! -f "$source" ]; then
-        warn "Browser Use $label not found in upstream resources; skipping"
+        if [ "$log_level" = "info" ]; then
+            info "Browser Use $label not found in upstream resources; skipping"
+        else
+            warn "Browser Use $label not found in upstream resources; skipping"
+        fi
         return 1
     fi
 
     if ! is_host_linux_elf_executable "$source"; then
-        warn "Browser Use $label is not a Linux executable for $ARCH; skipping"
+        if [ "$log_level" = "info" ]; then
+            info "Browser Use $label is not a Linux executable for $ARCH; skipping"
+        else
+            warn "Browser Use $label is not a Linux executable for $ARCH; skipping"
+        fi
         return 1
     fi
 
@@ -220,9 +229,7 @@ install_browser_use_node_repl_resource() {
 
     for source in \
         "${CODEX_LINUX_NODE_REPL_SOURCE:-}" \
-        "${CODEX_NODE_REPL_PATH:-}" \
-        "${XDG_CACHE_HOME:-$HOME/.cache}/codex-runtimes/codex-primary-runtime/dependencies/bin/node_repl" \
-        "$upstream_source"
+        "${CODEX_NODE_REPL_PATH:-}"
     do
         [ -n "$source" ] || continue
         if install_linux_executable_resource "$source" "$destination" "node_repl runtime"; then
@@ -230,12 +237,123 @@ install_browser_use_node_repl_resource() {
         fi
     done
 
+    source="${XDG_CACHE_HOME:-$HOME/.cache}/codex-runtimes/codex-primary-runtime/dependencies/bin/node_repl"
+    if [ -f "$source" ] && install_linux_executable_resource "$source" "$destination" "node_repl runtime"; then
+        return 0
+    fi
+
+    if [ -n "$upstream_source" ] && install_linux_executable_resource "$upstream_source" "$destination" "node_repl runtime" "info"; then
+        return 0
+    fi
+
     install_node_repl_from_primary_runtime_archive "$destination"
 }
 
 remove_macos_sidecar_files() {
     local root="$1"
     find "$root" -type f -name '*:com.apple.*' -delete
+}
+
+chrome_extension_host_arch() {
+    case "$ARCH" in
+        x86_64) echo "x64" ;;
+        aarch64|arm64) echo "arm64" ;;
+        *) return 1 ;;
+    esac
+}
+
+build_chrome_extension_host() {
+    local source_binary="$SCRIPT_DIR/target/release/codex-chrome-extension-host"
+    local cargo_cmd=""
+
+    if ! cargo_cmd="$(find_cargo_for_linux_computer_use)"; then
+        warn "cargo not found; Chrome extension host will be unavailable"
+        return 1
+    fi
+
+    info "Building Chrome extension host..."
+    if ! (cd "$SCRIPT_DIR" && "$cargo_cmd" build --release -p codex-computer-use-linux --bin codex-chrome-extension-host >&2); then
+        warn "Failed to build Chrome extension host"
+        return 1
+    fi
+
+    if [ ! -x "$source_binary" ]; then
+        warn "Chrome extension host binary missing after build: $source_binary"
+        return 1
+    fi
+
+    printf '%s\n' "$source_binary"
+}
+
+install_chrome_extension_host_resource() {
+    local target_plugin="$1"
+    local source_host=""
+    local extension_arch
+    local target_host
+
+    if ! extension_arch="$(chrome_extension_host_arch)"; then
+        warn "Chrome extension host is unavailable for $ARCH; skipping Chrome plugin"
+        return 1
+    fi
+
+    if ! source_host="$(build_chrome_extension_host)"; then
+        return 1
+    fi
+
+    target_host="$target_plugin/extension-host/linux/$extension_arch/extension-host"
+    mkdir -p "$(dirname "$target_host")"
+    install -m 0755 "$source_host" "$target_host"
+}
+
+patch_chrome_plugin_for_linux() {
+    local target_plugin="$1"
+    local patcher="$SCRIPT_DIR/scripts/lib/patch-chrome-plugin.js"
+
+    if [ ! -f "$patcher" ]; then
+        warn "Chrome plugin patch helper not found at $patcher; leaving upstream scripts unchanged"
+        return 0
+    fi
+
+    if ! node "$patcher" "$target_plugin" >&2; then
+        warn "Chrome plugin Linux patch helper failed; leaving upstream scripts as-is"
+    fi
+}
+
+stage_chrome_plugin_from_upstream() {
+    local source_plugin="$1"
+    local target_plugins="$2"
+    local target_plugin="$target_plugins/chrome"
+    local source_manifest="$source_plugin/.codex-plugin/plugin.json"
+    local source_client="$source_plugin/scripts/browser-client.mjs"
+    local source_install_manifest="$source_plugin/scripts/installManifest.mjs"
+
+    if [ ! -d "$source_plugin" ]; then
+        warn "Chrome bundled plugin resources not found in upstream app; skipping Chrome"
+        return 1
+    fi
+
+    if [ ! -f "$source_manifest" ]; then
+        warn "Chrome plugin manifest not found in upstream app; skipping Chrome"
+        return 1
+    fi
+
+    if [ ! -f "$source_client" ] || [ ! -f "$source_install_manifest" ]; then
+        warn "Chrome plugin scripts not found in upstream app; skipping Chrome"
+        return 1
+    fi
+
+    rm -rf "$target_plugin"
+    cp -R "$source_plugin" "$target_plugin"
+    remove_macos_sidecar_files "$target_plugin"
+    patch_chrome_plugin_for_linux "$target_plugin"
+    patch_browser_use_site_status_allowlist_fallback "$target_plugin/scripts/browser-client.mjs"
+    if ! install_chrome_extension_host_resource "$target_plugin"; then
+        rm -rf "$target_plugin"
+        return 1
+    fi
+
+    info "Chrome plugin staged from upstream DMG"
+    return 0
 }
 
 patch_browser_use_site_status_allowlist_fallback() {
@@ -324,16 +442,18 @@ write_bundled_plugins_marketplace() {
     local source="$1"
     local destination="$2"
     local include_browser="$3"
-    local include_computer_use="$4"
+    local include_chrome="$4"
+    local include_computer_use="$5"
 
-    node - "$source" "$destination" "$include_browser" "$include_computer_use" <<'NODE'
+    node - "$source" "$destination" "$include_browser" "$include_chrome" "$include_computer_use" <<'NODE'
 const fs = require("fs");
 const path = require("path");
 
 const sourcePath = process.argv[2];
 const destinationPath = process.argv[3];
 const includeBrowser = process.argv[4] === "1";
-const includeComputerUse = process.argv[5] === "1";
+const includeChrome = process.argv[5] === "1";
+const includeComputerUse = process.argv[6] === "1";
 const marketplace = JSON.parse(fs.readFileSync(sourcePath, "utf8"));
 const sourcePlugins = marketplace.plugins || [];
 const plugins = [];
@@ -344,6 +464,14 @@ if (includeBrowser) {
     throw new Error("Bundled marketplace does not contain browser-use plugin");
   }
   plugins.push(browserUse);
+}
+
+if (includeChrome) {
+  const chrome = sourcePlugins.find((plugin) => plugin.name === "chrome");
+  if (chrome == null) {
+    throw new Error("Bundled marketplace does not contain chrome plugin");
+  }
+  plugins.push(chrome);
 }
 
 if (includeComputerUse) {
@@ -371,10 +499,12 @@ install_bundled_plugin_resources() {
     local app_dir="$1"
     local upstream_resources="$app_dir/Contents/Resources"
     local source_marketplace="$upstream_resources/plugins/openai-bundled/.agents/plugins/marketplace.json"
-    local source_plugin="$upstream_resources/plugins/openai-bundled/plugins/browser-use"
+    local source_browser_plugin="$upstream_resources/plugins/openai-bundled/plugins/browser-use"
+    local source_chrome_plugin="$upstream_resources/plugins/openai-bundled/plugins/chrome"
     local resources_dir="$INSTALL_DIR/resources"
     local bundled_plugins_dir="$resources_dir/plugins/openai-bundled"
     local include_browser=0
+    local include_chrome=0
     local include_computer_use=0
 
     if [ ! -f "$source_marketplace" ]; then
@@ -384,8 +514,12 @@ install_bundled_plugin_resources() {
 
     mkdir -p "$bundled_plugins_dir/plugins" "$bundled_plugins_dir/.agents/plugins"
 
-    if stage_browser_use_plugin_from_upstream "$source_plugin" "$bundled_plugins_dir/plugins"; then
+    if stage_browser_use_plugin_from_upstream "$source_browser_plugin" "$bundled_plugins_dir/plugins"; then
         include_browser=1
+    fi
+
+    if stage_chrome_plugin_from_upstream "$source_chrome_plugin" "$bundled_plugins_dir/plugins"; then
+        include_chrome=1
     fi
 
     if stage_linux_computer_use_plugin "$bundled_plugins_dir/plugins"; then
@@ -394,14 +528,14 @@ install_bundled_plugin_resources() {
         warn "Linux Computer Use plugin will be unavailable"
     fi
 
-    if [ "$include_browser" -eq 0 ] && [ "$include_computer_use" -eq 0 ]; then
+    if [ "$include_browser" -eq 0 ] && [ "$include_chrome" -eq 0 ] && [ "$include_computer_use" -eq 0 ]; then
         warn "No Linux-safe bundled plugins were staged"
         return 0
     fi
 
-    write_bundled_plugins_marketplace "$source_marketplace" "$bundled_plugins_dir/.agents/plugins/marketplace.json" "$include_browser" "$include_computer_use"
+    write_bundled_plugins_marketplace "$source_marketplace" "$bundled_plugins_dir/.agents/plugins/marketplace.json" "$include_browser" "$include_chrome" "$include_computer_use"
 
-    install_linux_executable_resource "$upstream_resources/node" "$resources_dir/node" "node runtime" || true
+    install_linux_executable_resource "$upstream_resources/node" "$resources_dir/node" "node runtime" "info" || true
     install_browser_use_node_repl_resource "$upstream_resources/node_repl" "$resources_dir/node_repl" || true
 
     info "Linux-safe bundled plugins installed"

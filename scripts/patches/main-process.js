@@ -125,162 +125,11 @@ function applyLinuxSetIconPatch(currentSource, iconAsset) {
   );
 }
 
-function applyLinuxAvatarOverlayMousePassthroughPatch(currentSource) {
-  let patchedSource = currentSource;
-
-  const interactivityNeedle =
-    "applyPointerInteractivityPolicy(){let e=this.window;if(e==null||e.isDestroyed()){this.mousePassthroughEnabled=!1;return}let t=!this.pointerInteractive;if(this.mousePassthroughEnabled!==t){if(this.mousePassthroughEnabled=t,t){e.setIgnoreMouseEvents(!0,{forward:!0});return}e.setIgnoreMouseEvents(!1),this.refreshCursorAtCurrentMousePosition(e)}}refreshCursorAtCurrentMousePosition(e){";
-  const previousInteractivityNeedle =
-    "applyPointerInteractivityPolicy(){let e=this.window;if(e==null||e.isDestroyed()){this.mousePassthroughEnabled=!1,this.codexLinuxStopAvatarPassthroughRecovery();return}let t=!this.pointerInteractive;if(this.mousePassthroughEnabled!==t){if(this.mousePassthroughEnabled=t,t){e.setIgnoreMouseEvents(!0,{forward:!0}),this.codexLinuxStartAvatarPassthroughRecovery();return}this.codexLinuxStopAvatarPassthroughRecovery(),e.setIgnoreMouseEvents(!1),this.refreshCursorAtCurrentMousePosition(e)}else t&&this.codexLinuxStartAvatarPassthroughRecovery()}codexLinuxStopAvatarPassthroughRecovery(){this.codexLinuxAvatarPassthroughRecoveryTimer!=null&&(clearInterval(this.codexLinuxAvatarPassthroughRecoveryTimer),this.codexLinuxAvatarPassthroughRecoveryTimer=null)}codexLinuxRecoverAvatarPointerInteractivity(){this.pointerInteractive=!0,this.applyPointerInteractivityPolicy()}codexLinuxStartAvatarPassthroughRecovery(){if(process.platform!==`linux`||this.codexLinuxAvatarPassthroughRecoveryTimer!=null)return;this.codexLinuxAvatarPassthroughRecoveryTimer=setInterval(()=>{let e=this.window;if(e==null||e.isDestroyed()||!this.mousePassthroughEnabled){this.codexLinuxStopAvatarPassthroughRecovery();return}let t;try{t=this.codexLinuxIsCursorInAvatarInteractiveRegion(e)}catch{this.codexLinuxRecoverAvatarPointerInteractivity();return}t&&this.codexLinuxRecoverAvatarPointerInteractivity()},80),this.codexLinuxAvatarPassthroughRecoveryTimer.unref?.()}codexLinuxIsCursorInAvatarInteractiveRegion(e){let t=this.layout;if(t==null)return!1;let r=n.screen.getCursorScreenPoint(),i=e.getContentBounds(),a=r.x-i.x,o=r.y-i.y,s=e=>e!=null&&a>=e.left&&a<=e.left+e.width&&o>=e.top&&o<=e.top+e.height;return s(t.mascot)||s(t.tray)}refreshCursorAtCurrentMousePosition(e){";
-  const previousSyncInteractivityNeedle =
-    "applyPointerInteractivityPolicy(){let e=this.window;if(e==null||e.isDestroyed()){this.mousePassthroughEnabled=!1,this.codexLinuxStopAvatarPassthroughRecovery();return}process.platform===`linux`&&(this.codexLinuxStartAvatarPassthroughRecovery(),this.codexLinuxSyncAvatarPointerInteractivity(e));let t=!this.pointerInteractive;this.dragState!=null&&(t=!1);if(this.mousePassthroughEnabled!==t){if(this.mousePassthroughEnabled=t,t){e.setIgnoreMouseEvents(!0,{forward:!0});return}e.setIgnoreMouseEvents(!1),this.refreshCursorAtCurrentMousePosition(e)}}codexLinuxStopAvatarPassthroughRecovery(){this.codexLinuxAvatarPassthroughRecoveryTimer!=null&&(clearInterval(this.codexLinuxAvatarPassthroughRecoveryTimer),this.codexLinuxAvatarPassthroughRecoveryTimer=null)}codexLinuxStartAvatarPassthroughRecovery(){if(process.platform!==`linux`||this.codexLinuxAvatarPassthroughRecoveryTimer!=null)return;this.codexLinuxAvatarPassthroughRecoveryTimer=setInterval(()=>{let e=this.window;if(e==null||e.isDestroyed()||!e.isVisible()){this.codexLinuxStopAvatarPassthroughRecovery();return}this.codexLinuxSyncAvatarPointerInteractivity(e)&&this.applyPointerInteractivityPolicy()},32),this.codexLinuxAvatarPassthroughRecoveryTimer.unref?.()}codexLinuxSyncAvatarPointerInteractivity(e){if(process.platform!==`linux`||e==null||e.isDestroyed())return!1;if(this.dragState!=null){if(this.pointerInteractive)return!1;return this.pointerInteractive=!0,!0}let t;try{t=this.codexLinuxIsCursorInAvatarInteractiveRegion(e)}catch{t=!0}return this.pointerInteractive===t?!1:(this.pointerInteractive=t,!0)}codexLinuxIsCursorInAvatarInteractiveRegion(e){let t=this.layout;if(t==null)return!1;let r=n.screen.getCursorScreenPoint(),i=e.getContentBounds(),a=r.x-i.x,o=r.y-i.y;if(a<0||o<0||a>i.width||o>i.height)return!1;let s=e=>e!=null&&a>=e.left&&a<=e.left+e.width&&o>=e.top&&o<=e.top+e.height;return s(t.mascot)||s(t.tray)}refreshCursorAtCurrentMousePosition(e){";
-  const interactivityPatch =
-    "applyPointerInteractivityPolicy(){let e=this.window;if(e==null||e.isDestroyed()){this.mousePassthroughEnabled=!1,this.codexLinuxStopAvatarPassthroughRecovery();return}if(process.platform===`linux`&&typeof e.setShape==`function`){this.codexLinuxStopAvatarPassthroughRecovery(),this.mousePassthroughEnabled&&(this.mousePassthroughEnabled=!1,e.setIgnoreMouseEvents(!1));if(this.codexLinuxApplyAvatarInputShape(e))return}process.platform===`linux`&&(this.codexLinuxStartAvatarPassthroughRecovery(),this.codexLinuxSyncAvatarPointerInteractivity(e));let t=!this.pointerInteractive;this.dragState!=null&&(t=!1);if(this.mousePassthroughEnabled!==t){if(this.mousePassthroughEnabled=t,t){e.setIgnoreMouseEvents(!0,{forward:!0});return}e.setIgnoreMouseEvents(!1),this.refreshCursorAtCurrentMousePosition(e)}}codexLinuxStopAvatarPassthroughRecovery(){this.codexLinuxAvatarPassthroughRecoveryTimer!=null&&(clearInterval(this.codexLinuxAvatarPassthroughRecoveryTimer),this.codexLinuxAvatarPassthroughRecoveryTimer=null)}codexLinuxBuildAvatarInputShape(e){let t=this.layout;if(t==null)return null;if(this.dragState!=null){let t=e.getContentBounds();return[{x:0,y:0,width:t.width,height:t.height}]}let r=e.getContentBounds(),i=e=>{if(e==null)return null;let t=Math.max(0,e.left),n=Math.max(0,e.top),i=Math.min(r.width,e.left+e.width)-t,a=Math.min(r.height,e.top+e.height)-n;return i<=0||a<=0?null:{x:t,y:n,width:i,height:a}};return[i(t.mascot),i(t.tray)].filter(Boolean)}codexLinuxApplyAvatarInputShape(e){if(process.platform!==`linux`||e==null||e.isDestroyed()||typeof e.setShape!=`function`)return!1;let t=this.codexLinuxBuildAvatarInputShape(e);if(t==null)return!1;let n=JSON.stringify(t);if(this.codexLinuxAvatarInputShapeKey===n)return!0;try{e.setShape(t),this.codexLinuxAvatarInputShapeKey=n;return!0}catch{this.codexLinuxAvatarInputShapeKey=null;return!1}}codexLinuxStartAvatarPassthroughRecovery(){if(process.platform!==`linux`||this.codexLinuxAvatarPassthroughRecoveryTimer!=null)return;this.codexLinuxAvatarPassthroughRecoveryTimer=setInterval(()=>{let e=this.window;if(e==null||e.isDestroyed()||!e.isVisible()){this.codexLinuxStopAvatarPassthroughRecovery();return}this.codexLinuxSyncAvatarPointerInteractivity(e)&&this.applyPointerInteractivityPolicy()},32),this.codexLinuxAvatarPassthroughRecoveryTimer.unref?.()}codexLinuxSyncAvatarPointerInteractivity(e){if(process.platform!==`linux`||e==null||e.isDestroyed())return!1;if(this.dragState!=null){if(this.pointerInteractive)return!1;return this.pointerInteractive=!0,!0}let t;try{t=this.codexLinuxIsCursorInAvatarInteractiveRegion(e)}catch{t=!0}return this.pointerInteractive===t?!1:(this.pointerInteractive=t,!0)}codexLinuxIsCursorInAvatarInteractiveRegion(e){let t=this.layout;if(t==null)return!1;let r=n.screen.getCursorScreenPoint(),i=e.getContentBounds(),a=r.x-i.x,o=r.y-i.y;if(a<0||o<0||a>i.width||o>i.height)return!1;let s=e=>e!=null&&a>=e.left&&a<=e.left+e.width&&o>=e.top&&o<=e.top+e.height;return s(t.mascot)||s(t.tray)}refreshCursorAtCurrentMousePosition(e){";
-
-  if (!patchedSource.includes("codexLinuxApplyAvatarInputShape")) {
-    if (patchedSource.includes(interactivityNeedle)) {
-      patchedSource = patchedSource.replace(interactivityNeedle, interactivityPatch);
-    } else if (patchedSource.includes(previousInteractivityNeedle)) {
-      patchedSource = patchedSource.replace(previousInteractivityNeedle, interactivityPatch);
-    } else if (patchedSource.includes(previousSyncInteractivityNeedle)) {
-      patchedSource = patchedSource.replace(previousSyncInteractivityNeedle, interactivityPatch);
-    } else if (
-      patchedSource.includes("avatar-overlay") &&
-      patchedSource.includes("applyPointerInteractivityPolicy(){let e=this.window")
-    ) {
-      console.warn(
-        "WARN: Could not find avatar overlay mouse passthrough policy — skipping Linux avatar overlay passthrough recovery patch",
-      );
-      return currentSource;
-    }
-  }
-
-  const previousStartDragPatch =
-    "startDrag(e,{pointerWindowX:t,pointerWindowY:r}){let i=this.window;if(i==null||i.isDestroyed()||i.webContents.id!==e)return;this.pointerInteractive=!0,this.applyPointerInteractivityPolicy(),this.cancelMomentum();";
-  const originalStartDragPrefix =
-    "startDrag(e,{pointerWindowX:t,pointerWindowY:r}){let i=this.window;if(i==null||i.isDestroyed()||i.webContents.id!==e)return;this.cancelMomentum();";
-  const startDragNeedle =
-    "displayBounds:n.screen.getDisplayNearestPoint(n.screen.getCursorScreenPoint()).bounds}}moveDrag(e){";
-  const startDragPatch =
-    "displayBounds:n.screen.getDisplayNearestPoint(n.screen.getCursorScreenPoint()).bounds},process.platform===`linux`&&(this.pointerInteractive=!0,this.applyPointerInteractivityPolicy())}moveDrag(e){";
-  const previousStartDragAfterStatePatch =
-    "displayBounds:n.screen.getDisplayNearestPoint(n.screen.getCursorScreenPoint()).bounds},this.pointerInteractive=!0,this.applyPointerInteractivityPolicy()}moveDrag(e){";
-  if (patchedSource.includes(previousStartDragPatch)) {
-    patchedSource = patchedSource.replace(previousStartDragPatch, originalStartDragPrefix);
-  }
-  if (patchedSource.includes(previousStartDragAfterStatePatch)) {
-    patchedSource = patchedSource.replace(previousStartDragAfterStatePatch, startDragPatch);
-  } else if (patchedSource.includes(startDragNeedle)) {
-    patchedSource = patchedSource.replace(startDragNeedle, startDragPatch);
-  } else if (
-    patchedSource.includes("avatar-overlay") &&
-    !patchedSource.includes(startDragPatch)
-  ) {
-    console.warn(
-      "WARN: Could not find avatar overlay drag start — skipping Linux avatar overlay drag interactivity patch",
-    );
-  }
-
-  const endDragNeedle =
-    "endDrag(e){let t=this.window;t==null||t.isDestroyed()||t.webContents.id!==e||(this.dragState?.hasMoved&&this.moveDragToCurrentCursor(t),this.dragState=null,this.reclampWindowToVisibleDisplay({shouldPersist:!0}))}";
-  const endDragPatch =
-    "endDrag(e){let t=this.window;t==null||t.isDestroyed()||t.webContents.id!==e||(this.dragState?.hasMoved&&this.moveDragToCurrentCursor(t),this.dragState=null,this.reclampWindowToVisibleDisplay({shouldPersist:!0}),process.platform===`linux`&&this.applyPointerInteractivityPolicy())}";
-  const previousEndDragPatch =
-    "endDrag(e){let t=this.window;t==null||t.isDestroyed()||t.webContents.id!==e||(this.dragState?.hasMoved&&this.moveDragToCurrentCursor(t),this.dragState=null,this.reclampWindowToVisibleDisplay({shouldPersist:!0}),this.codexLinuxSyncAvatarPointerInteractivity(t)&&this.applyPointerInteractivityPolicy())}";
-  if (patchedSource.includes(previousEndDragPatch)) {
-    patchedSource = patchedSource.replace(previousEndDragPatch, endDragPatch);
-  } else if (patchedSource.includes(endDragNeedle)) {
-    patchedSource = patchedSource.replace(endDragNeedle, endDragPatch);
-  } else if (
-    patchedSource.includes("avatar-overlay") &&
-    !patchedSource.includes(endDragPatch)
-  ) {
-    console.warn(
-      "WARN: Could not find avatar overlay drag end — skipping Linux avatar overlay drag cleanup patch",
-    );
-  }
-
-  const setElementSizeNeedle =
-    "setElementSize(e,{mascot:t,tray:n}){let r=this.window;r==null||r.isDestroyed()||r.webContents.id!==e||(this.cancelMomentum(),this.anchor={...this.anchor,width:t.width,height:t.height},this.mascotSize=t,this.traySize=n,this.applyLayout(r))}";
-  const setElementSizePatch =
-    "setElementSize(e,{mascot:t,tray:n}){let r=this.window;r==null||r.isDestroyed()||r.webContents.id!==e||(this.cancelMomentum(),this.anchor={...this.anchor,width:t.width,height:t.height},this.mascotSize=t,this.traySize=n,this.applyLayout(r),process.platform===`linux`&&this.applyPointerInteractivityPolicy())}";
-  const previousSetElementSizePatch =
-    "setElementSize(e,{mascot:t,tray:n}){let r=this.window;r==null||r.isDestroyed()||r.webContents.id!==e||(this.cancelMomentum(),this.anchor={...this.anchor,width:t.width,height:t.height},this.mascotSize=t,this.traySize=n,this.applyLayout(r),this.codexLinuxSyncAvatarPointerInteractivity(r)&&this.applyPointerInteractivityPolicy())}";
-  if (patchedSource.includes(previousSetElementSizePatch)) {
-    patchedSource = patchedSource.replace(previousSetElementSizePatch, setElementSizePatch);
-  } else if (patchedSource.includes(setElementSizeNeedle)) {
-    patchedSource = patchedSource.replace(setElementSizeNeedle, setElementSizePatch);
-  } else if (
-    patchedSource.includes("avatar-overlay") &&
-    !patchedSource.includes(setElementSizePatch)
-  ) {
-    console.warn(
-      "WARN: Could not find avatar overlay element size update — skipping Linux avatar overlay layout interactivity patch",
-    );
-  }
-
-  const applyLayoutNeedle =
-    "this.setWindowBounds(e,r.windowBounds),this.sendLayoutToRenderer(e)}getLayout(e){";
-  const applyLayoutPatch =
-    "this.setWindowBounds(e,r.windowBounds),this.sendLayoutToRenderer(e),process.platform===`linux`&&this.applyPointerInteractivityPolicy()}getLayout(e){";
-  const previousApplyLayoutPatch =
-    "this.setWindowBounds(e,r.windowBounds),this.sendLayoutToRenderer(e),this.codexLinuxSyncAvatarPointerInteractivity(e)&&this.applyPointerInteractivityPolicy()}getLayout(e){";
-  if (patchedSource.includes(previousApplyLayoutPatch)) {
-    patchedSource = patchedSource.replace(previousApplyLayoutPatch, applyLayoutPatch);
-  } else if (patchedSource.includes(applyLayoutNeedle)) {
-    patchedSource = patchedSource.replace(applyLayoutNeedle, applyLayoutPatch);
-  } else if (
-    patchedSource.includes("avatar-overlay") &&
-    !patchedSource.includes(applyLayoutPatch)
-  ) {
-    console.warn(
-      "WARN: Could not find avatar overlay layout application — skipping Linux avatar overlay layout sync patch",
-    );
-  }
-
-  const showWindowNeedle =
-    "e.moveTop(),e.showInactive(),!t&&this.isOpen()&&this.broadcastOpenState()}broadcastOpenState(){";
-  const showWindowPatch =
-    "e.moveTop(),e.showInactive(),process.platform===`linux`&&this.applyPointerInteractivityPolicy(),!t&&this.isOpen()&&this.broadcastOpenState()}broadcastOpenState(){";
-  const previousShowWindowPatch =
-    "e.moveTop(),e.showInactive(),process.platform===`linux`&&this.codexLinuxStartAvatarPassthroughRecovery(),this.codexLinuxSyncAvatarPointerInteractivity(e)&&this.applyPointerInteractivityPolicy(),!t&&this.isOpen()&&this.broadcastOpenState()}broadcastOpenState(){";
-  if (patchedSource.includes(previousShowWindowPatch)) {
-    patchedSource = patchedSource.replace(previousShowWindowPatch, showWindowPatch);
-  } else if (patchedSource.includes(showWindowNeedle)) {
-    patchedSource = patchedSource.replace(showWindowNeedle, showWindowPatch);
-  } else if (
-    patchedSource.includes("avatar-overlay") &&
-    !patchedSource.includes(showWindowPatch)
-  ) {
-    console.warn(
-      "WARN: Could not find avatar overlay show window — skipping Linux avatar overlay show sync patch",
-    );
-  }
-
-  const closedNeedle = "this.window===t&&(this.cancelMomentum(),this.window=null,";
-  const closedPatch =
-    "this.window===t&&(this.codexLinuxStopAvatarPassthroughRecovery(),this.codexLinuxAvatarInputShapeKey=null,this.cancelMomentum(),this.window=null,";
-  const previousClosedPatch =
-    "this.window===t&&(this.codexLinuxStopAvatarPassthroughRecovery(),this.cancelMomentum(),this.window=null,";
-  if (patchedSource.includes(previousClosedPatch)) {
-    patchedSource = patchedSource.replace(previousClosedPatch, closedPatch);
-  } else if (patchedSource.includes(closedNeedle)) {
-    patchedSource = patchedSource.replace(closedNeedle, closedPatch);
-  } else if (
-    patchedSource.includes("avatar-overlay") &&
-    patchedSource.includes("codexLinuxStartAvatarPassthroughRecovery") &&
-    !patchedSource.includes(closedPatch)
-  ) {
-    console.warn(
-      "WARN: Could not find avatar overlay close cleanup — skipping Linux avatar overlay passthrough cleanup patch",
-    );
-  }
-
-  return patchedSource;
-}
-
 function applyLinuxOpaqueBackgroundPatch(currentSource) {
-  if (currentSource.includes("===`linux`&&!OM(")) {
+  if (
+    currentSource.includes("===`linux`&&!OM(") ||
+    /===`linux`&&![A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)\?\{backgroundColor:[^{}]+,backgroundMaterial:null\}/.test(currentSource)
+  ) {
     return currentSource;
   }
 
@@ -366,13 +215,18 @@ function applyLinuxQuitGuardPatch(currentSource) {
   let patchedSource = currentSource;
 
   const quitGuardNeedle = "let n=require(`electron`),i=require(`node:path`),o=require(`node:fs`);";
-  const quitGuardPatch =
-    "let n=require(`electron`),i=require(`node:path`),o=require(`node:fs`);let codexLinuxQuitInProgress=!1,codexLinuxMarkQuitInProgress=()=>{codexLinuxQuitInProgress=!0},codexLinuxIsQuitInProgress=()=>codexLinuxQuitInProgress===!0;";
-  const quitGuardSuffix =
+  const legacyQuitGuardSuffix =
     "let codexLinuxQuitInProgress=!1,codexLinuxMarkQuitInProgress=()=>{codexLinuxQuitInProgress=!0},codexLinuxIsQuitInProgress=()=>codexLinuxQuitInProgress===!0;";
+  const quitGuardSuffix =
+    "let codexLinuxQuitInProgress=!1,codexLinuxExplicitQuitApproved=!1,codexLinuxExplicitQuitDrainTimeoutMs=3e3,codexLinuxMarkQuitInProgress=()=>{codexLinuxQuitInProgress=!0},codexLinuxPrepareForExplicitQuit=()=>{codexLinuxExplicitQuitApproved=!0,codexLinuxMarkQuitInProgress()},codexLinuxShouldBypassQuitPrompt=()=>codexLinuxExplicitQuitApproved===!0,codexLinuxIsQuitInProgress=()=>codexLinuxQuitInProgress===!0;";
+  const quitGuardPatch = `${quitGuardNeedle}${quitGuardSuffix}`;
 
-  if (patchedSource.includes("codexLinuxQuitInProgress=!1,codexLinuxMarkQuitInProgress=()=>{codexLinuxQuitInProgress=!0},codexLinuxIsQuitInProgress=()=>codexLinuxQuitInProgress===!0;")) {
+  if (patchedSource.includes("codexLinuxExplicitQuitApproved=!1")) {
     return patchedSource;
+  }
+
+  if (patchedSource.includes(legacyQuitGuardSuffix)) {
+    return patchedSource.replace(legacyQuitGuardSuffix, quitGuardSuffix);
   }
 
   if (patchedSource.includes(quitGuardNeedle)) {
@@ -398,11 +252,89 @@ function applyLinuxQuitGuardPatch(currentSource) {
   return patchedSource;
 }
 
+function linuxExplicitQuitExpression() {
+  return "typeof codexLinuxPrepareForExplicitQuit===`function`?codexLinuxPrepareForExplicitQuit():typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),";
+}
+
+function applyLinuxWillQuitDrainTimeoutPatch(currentSource) {
+  let patchedSource = currentSource;
+
+  const explicitQuitDrainGuard =
+    "process.platform===`linux`&&(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress())";
+  const originalDrainSnippet =
+    "Promise.all([...u.values()].map(e=>e.flush())).finally(()=>{d(),f.dispose(),n.app.quit()})";
+  const patchedDrainSnippet =
+    "(()=>{let codexLinuxFinalizeQuit=()=>{d(),f.dispose(),n.app.quit()},codexLinuxDrainPromise=Promise.all([...u.values()].map(e=>e.flush()));" +
+    `if(${explicitQuitDrainGuard}){Promise.race([codexLinuxDrainPromise,new Promise(e=>setTimeout(e,typeof codexLinuxExplicitQuitDrainTimeoutMs===\`number\`?codexLinuxExplicitQuitDrainTimeoutMs:3e3))]).finally(codexLinuxFinalizeQuit);return}` +
+    "codexLinuxDrainPromise.finally(codexLinuxFinalizeQuit)})()";
+
+  if (patchedSource.includes("codexLinuxDrainPromise=Promise.all([...u.values()].map(e=>e.flush()))")) {
+    return patchedSource;
+  }
+
+  if (patchedSource.includes(originalDrainSnippet)) {
+    return patchedSource.replace(originalDrainSnippet, patchedDrainSnippet);
+  }
+
+  const drainRegex =
+    /Promise\.all\(\[\.\.\.([A-Za-z_$][\w$]*)\.values\(\)\]\.map\(e=>e\.flush\(\)\)\)\.finally\(\(\)=>\{([A-Za-z_$][\w$]*)\(\),([A-Za-z_$][\w$]*)\.dispose\(\),([A-Za-z_$][\w$]*)\.app\.quit\(\)\}\)/;
+  if (drainRegex.test(patchedSource)) {
+    patchedSource = patchedSource.replace(
+      drainRegex,
+      (_match, globalStatesVar, flushDisposeVar, disposablesVar, electronVar) =>
+        `(()=>{let codexLinuxFinalizeQuit=()=>{${flushDisposeVar}(),${disposablesVar}.dispose(),${electronVar}.app.quit()},codexLinuxDrainPromise=Promise.all([...${globalStatesVar}.values()].map(e=>e.flush()));if(${explicitQuitDrainGuard}){Promise.race([codexLinuxDrainPromise,new Promise(e=>setTimeout(e,typeof codexLinuxExplicitQuitDrainTimeoutMs===\`number\`?codexLinuxExplicitQuitDrainTimeoutMs:3e3))]).finally(codexLinuxFinalizeQuit);return}codexLinuxDrainPromise.finally(codexLinuxFinalizeQuit)})()`,
+    );
+  } else if (
+    patchedSource.includes("n.app.on(`will-quit`,") &&
+    patchedSource.includes(".map(e=>e.flush())")
+  ) {
+    console.warn("WARN: Could not find will-quit drain sequence — skipping Linux explicit quit drain timeout patch");
+  }
+
+  return patchedSource;
+}
+
+function applyLinuxExplicitQuitPromptBypassPatch(currentSource) {
+  let patchedSource = currentSource;
+
+  const promptBypassExpression =
+    "(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt())||";
+  const promptBypassGuard = `if(${promptBypassExpression}`;
+  const beforeQuitNeedle =
+    "if(e||i.canQuitWithoutPrompt()||r||!s&&!c){g=!0,a.markAppQuitting();return}";
+  const beforeQuitPatch =
+    `if(${promptBypassExpression}e||i.canQuitWithoutPrompt()||r||!s&&!c){g=!0,a.markAppQuitting();return}`;
+  const beforeQuitRegex =
+    /if\(([A-Za-z_$][\w$]*)\|\|([A-Za-z_$][\w$]*)\.canQuitWithoutPrompt\(\)\|\|([A-Za-z_$][\w$]*)\|\|!([A-Za-z_$][\w$]*)&&!([A-Za-z_$][\w$]*)\)\{([A-Za-z_$][\w$]*)=!0,([A-Za-z_$][\w$]*)\.markAppQuitting\(\);return\}/;
+
+  if (patchedSource.includes(promptBypassGuard)) {
+    return patchedSource;
+  }
+
+  if (patchedSource.includes(beforeQuitNeedle)) {
+    return patchedSource.replace(beforeQuitNeedle, beforeQuitPatch);
+  }
+
+  if (beforeQuitRegex.test(patchedSource)) {
+    patchedSource = patchedSource.replace(
+      beforeQuitRegex,
+      (_match, updateInstallVar, quitControllerVar, appQuittingVar, activeConversationVar, automationVar, quittingStateVar, appQuittingControllerVar) =>
+        `if(${promptBypassExpression}${updateInstallVar}||${quitControllerVar}.canQuitWithoutPrompt()||${appQuittingVar}||!${activeConversationVar}&&!${automationVar}){${quittingStateVar}=!0,${appQuittingControllerVar}.markAppQuitting();return}`,
+    );
+  } else if (
+    patchedSource.includes("showMessageBoxSync({type:`warning`,buttons:[`Quit`,`Cancel`]") &&
+    patchedSource.includes(".canQuitWithoutPrompt()")
+  ) {
+    console.warn("WARN: Could not find before-quit confirmation guard — skipping Linux explicit quit prompt bypass patch");
+  }
+
+  return patchedSource;
+}
+
 function applyLinuxExplicitTrayQuitPatch(currentSource) {
   let patchedSource = currentSource;
 
-  const quitMarkerExpression =
-    "typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),";
+  const quitMarkerExpression = linuxExplicitQuitExpression();
 
   const trayQuitNeedle = "{label:rB(this.appName),click:()=>{n.app.quit()}}";
   const trayQuitPatch =
@@ -432,8 +364,7 @@ function applyLinuxExplicitTrayQuitPatch(currentSource) {
 function applyLinuxExplicitIpcQuitPatch(currentSource) {
   let patchedSource = currentSource;
 
-  const quitMarkerExpression =
-    "typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),";
+  const quitMarkerExpression = linuxExplicitQuitExpression();
 
   const quitAppNeedle = "if(o.type===`quit-app`){n.app.quit();return}";
   const quitAppPatch = `if(o.type===\`quit-app\`){${quitMarkerExpression}n.app.quit();return}`;
@@ -698,6 +629,134 @@ function applyBrowserUseNodeReplApprovalPatch(currentSource) {
   return currentSource.replace(needle, approvalPatch);
 }
 
+function applyLinuxBrowserUseIabVisibleOnCreatePatch(currentSource) {
+  const marker = "codexLinuxBrowserUseAutoVisible";
+  if (currentSource.includes(marker)) {
+    return currentSource;
+  }
+
+  const visibilityExpr = (hostExpr, sessionExpr) =>
+    `(()=>{try{${hostExpr}.setBrowserVisibleForBrowserUse(!0,${sessionExpr}.turnId)}catch(__codexLinuxErr){console.warn("${marker}",__codexLinuxErr?.message??__codexLinuxErr)}})()`;
+  const createTabRegex =
+    /if\(([A-Za-z_$][\w$]*)!=null\)return await this\.navigateTabToInitialPage\(\1\),this\.serializeTab\(\1\);let ([A-Za-z_$][\w$]*)=this\.getRequiredBrowserHost\(([A-Za-z_$][\w$]*)\);\2\.setBrowserUseActive\(!0,\3\.turnId\);let ([A-Za-z_$][\w$]*)=await \2\.openPageForBrowserUse\(\{startingUrl:this\.initialPageUrl,turnId:\3\.turnId\}\),([A-Za-z_$][\w$]*)=this\.updateTabForPage\(\4,\2\.routeKey\);return/;
+  const match = currentSource.match(createTabRegex);
+  if (match == null) {
+    if (
+      currentSource.includes("createTabForBrowserUse") &&
+      currentSource.includes("openPageForBrowserUse")
+    ) {
+      console.warn(
+        "WARN: Could not find Browser Use IAB tab creation point — skipping Linux IAB visibility patch",
+      );
+    }
+    return currentSource;
+  }
+
+  const [needle, tabVar, hostVar, sessionVar, pageVar, tabInfoVar] = match;
+  const activeTabVisibility = visibilityExpr(
+    `this.getRequiredBrowserHost(${sessionVar})`,
+    sessionVar,
+  );
+  const newTabVisibility = visibilityExpr(hostVar, sessionVar);
+  const replacement =
+    `if(${tabVar}!=null)return await this.navigateTabToInitialPage(${tabVar}),${activeTabVisibility},this.serializeTab(${tabVar});` +
+    `let ${hostVar}=this.getRequiredBrowserHost(${sessionVar});${hostVar}.setBrowserUseActive(!0,${sessionVar}.turnId);` +
+    `let ${pageVar}=await ${hostVar}.openPageForBrowserUse({startingUrl:this.initialPageUrl,turnId:${sessionVar}.turnId}),${tabInfoVar}=this.updateTabForPage(${pageVar},${hostVar}.routeKey);` +
+    `return ${newTabVisibility},`;
+
+  return currentSource.replace(needle, replacement);
+}
+
+function applyLinuxChromeExtensionStatusPatch(currentSource) {
+  if (currentSource.includes("codexLinuxChromeProfileRoots")) {
+    return currentSource;
+  }
+
+  const fsVar = requireName(currentSource, "node:fs");
+  const osVar = requireName(currentSource, "node:os");
+  const pathVar = requireName(currentSource, "node:path");
+  if (fsVar == null || osVar == null || pathVar == null) {
+    console.warn(
+      "WARN: Could not find fs/os/path aliases — skipping Linux Chrome extension status patch",
+    );
+    return currentSource;
+  }
+
+  const unsupportedMessage =
+    "Opening Chrome extension settings is only supported on macOS and Windows";
+  const unsupportedMessageIndex = currentSource.indexOf(unsupportedMessage);
+  const openFunctionStart =
+    unsupportedMessageIndex === -1
+      ? -1
+      : currentSource.lastIndexOf("async function ", unsupportedMessageIndex);
+  const blockStart =
+    openFunctionStart === -1
+      ? -1
+      : currentSource.lastIndexOf("function ", openFunctionStart - 1);
+  const blockEnd =
+    openFunctionStart === -1
+      ? -1
+      : currentSource.indexOf("function ", openFunctionStart + "async function ".length);
+  const originalBlock = blockEnd === -1 ? null : currentSource.slice(blockStart, blockEnd);
+  if (
+    blockStart === -1 ||
+    blockEnd === -1 ||
+    !originalBlock.includes(unsupportedMessage)
+  ) {
+    console.warn(
+      "WARN: Could not find Chrome extension status functions — skipping Linux Chrome extension status patch",
+    );
+    return currentSource;
+  }
+
+  const statusFunctionName = /^function ([A-Za-z_$][\w$]*)\(\{extensionId:/.exec(
+    originalBlock,
+  )?.[1];
+  const openFunctionName = /async function ([A-Za-z_$][\w$]*)\(\{extensionId:/.exec(
+    originalBlock,
+  )?.[1];
+  const detectChromeFunctionName =
+    /detectChromeCommand:[A-Za-z_$][\w$]*=([A-Za-z_$][\w$]*)/.exec(originalBlock)?.[1];
+  const runCommandFunctionName =
+    /runCommand:[A-Za-z_$][\w$]*=([A-Za-z_$][\w$]*)/.exec(originalBlock)?.[1];
+  const extensionUrlFunctionName = /await [A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*,\[([A-Za-z_$][\w$]*)\(e\)\]\)/.exec(
+    originalBlock,
+  )?.[1];
+  const macOpenFunctionName = /await [A-Za-z_$][\w$]*\(([A-Za-z_$][\w$]*),\[`-b`,/.exec(
+    originalBlock,
+  )?.[1];
+  const macBundleIdName = /await [A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*,\[`-b`,([A-Za-z_$][\w$]*),/.exec(
+    originalBlock,
+  )?.[1];
+  const extensionIdValidatorName = /let [A-Za-z_$][\w$]*=([A-Za-z_$][\w$]*)\(e\),/.exec(
+    originalBlock,
+  )?.[1];
+  const profileDirFunctionName = /[A-Za-z_$][\w$]*=([A-Za-z_$][\w$]*)\(\{homeDir:/.exec(
+    originalBlock,
+  )?.[1];
+  if (
+    statusFunctionName == null ||
+    openFunctionName == null ||
+    detectChromeFunctionName == null ||
+    runCommandFunctionName == null ||
+    extensionUrlFunctionName == null ||
+    macOpenFunctionName == null ||
+    macBundleIdName == null ||
+    extensionIdValidatorName == null ||
+    profileDirFunctionName == null
+  ) {
+    console.warn(
+      "WARN: Could not identify Chrome extension status helper names — skipping Linux Chrome extension status patch",
+    );
+    return currentSource;
+  }
+
+  const replacement =
+    `function codexLinuxChromeProfileRoots({homeDir:e,platform:t}){return t===\`linux\`?[(0,${pathVar}.join)(e,\`.config\`,\`BraveSoftware\`,\`Brave-Browser\`),(0,${pathVar}.join)(e,\`.config\`,\`google-chrome\`),(0,${pathVar}.join)(e,\`.config\`,\`google-chrome-beta\`),(0,${pathVar}.join)(e,\`.config\`,\`google-chrome-unstable\`),(0,${pathVar}.join)(e,\`.config\`,\`chromium\`)]:[]}function codexLinuxChromeHasExtension({extensionId:e,homeDir:t,platform:n}){if(n!==\`linux\`)return!1;let r=${extensionIdValidatorName}(e);for(let e of codexLinuxChromeProfileRoots({homeDir:t,platform:n})){if(!(0,${fsVar}.existsSync)(e))continue;for(let t of (0,${fsVar}.readdirSync)(e,{withFileTypes:!0}))if(t.isDirectory()&&(0,${fsVar}.existsSync)((0,${pathVar}.join)(e,t.name,\`Extensions\`,r)))return!0}return!1}function codexLinuxChromeCommand(){let e=(process.env.PATH??\`\`).split(\`:\`);for(let t of[\`brave-browser\`,\`brave\`,\`google-chrome\`,\`google-chrome-stable\`,\`chromium-browser\`,\`chromium\`])for(let n of e){if(n.length===0)continue;let e=(0,${pathVar}.join)(n,t);try{if((0,${fsVar}.existsSync)(e)&&(0,${fsVar}.statSync)(e).isFile())return e}catch{}}return null}function ${statusFunctionName}({extensionId:e,homeDir:t=(0,${osVar}.homedir)(),localAppDataDir:n=process.env.LOCALAPPDATA,platform:a=process.platform}){if(a===\`linux\`)return codexLinuxChromeHasExtension({extensionId:e,homeDir:t,platform:a});let s=${extensionIdValidatorName}(e),c=${profileDirFunctionName}({homeDir:t,localAppDataDir:n,platform:a});return c==null||!(0,${fsVar}.existsSync)(c)?!1:(0,${fsVar}.readdirSync)(c,{withFileTypes:!0}).some(e=>e.isDirectory()&&(0,${fsVar}.existsSync)((0,${pathVar}.join)(c,e.name,\`Extensions\`,s)))}async function ${openFunctionName}({extensionId:e,platform:t=process.platform,detectChromeCommand:n=${detectChromeFunctionName},runCommand:r=${runCommandFunctionName}}){if(t===\`darwin\`){await r(${macOpenFunctionName},[\`-b\`,${macBundleIdName},${extensionUrlFunctionName}(e)]);return}if(t===\`win32\`){let t=n();if(t==null)throw Error(\`Google Chrome is not installed\`);await r(t,[${extensionUrlFunctionName}(e)]);return}if(t===\`linux\`){let t=codexLinuxChromeCommand()??n();if(t==null)throw Error(\`Google Chrome, Brave, or Chromium is not installed\`);await r(t,[${extensionUrlFunctionName}(e)]);return}throw Error(\`Opening Chrome extension settings is only supported on macOS, Windows, and Linux\`)}`;
+
+  return currentSource.slice(0, blockStart) + replacement + currentSource.slice(blockEnd);
+}
+
 function applyLinuxGitOriginsSourceFallbackPatch(currentSource) {
   const fallbackSource = "linux_git_origins_missing_source_fallback";
   if (currentSource.includes(`source:\`${fallbackSource}\`,requestKind:`)) {
@@ -711,15 +770,22 @@ function applyLinuxGitOriginsSourceFallbackPatch(currentSource) {
   if (currentSource.includes(exactNeedle)) {
     return currentSource.replace(exactNeedle, exactReplacement);
   }
+  const currentExactNeedle =
+    "if(o==null){if(e.Gt(r))throw Error(`Missing git operation source for ${r}`);return l()}return t.Gt({source:o,requestKind:r},l)";
+  const currentExactReplacement =
+    `if(o==null){if(e.Gt(r)){if(r===\`git-origins\`)return t.Gt({source:\`${fallbackSource}\`,requestKind:r},l);throw Error(\`Missing git operation source for \${r}\`)}return l()}return t.Gt({source:o,requestKind:r},l)`;
+  if (currentSource.includes(currentExactNeedle)) {
+    return currentSource.replace(currentExactNeedle, currentExactReplacement);
+  }
 
   const dynamicRegex =
-    /if\(([A-Za-z_$][\w$]*)==null\)\{if\(([A-Za-z_$][\w$]*)\.qt\(([A-Za-z_$][\w$]*)\)\)throw Error\(`Missing git operation source for \$\{\3\}`\);return ([A-Za-z_$][\w$]*)\(\)\}return ([A-Za-z_$][\w$]*)\.Gt\(\{source:\1,requestKind:\3\},\4\)/;
+    /if\(([A-Za-z_$][\w$]*)==null\)\{if\(([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\)throw Error\(`Missing git operation source for \$\{\4\}`\);return ([A-Za-z_$][\w$]*)\(\)\}return ([A-Za-z_$][\w$]*)\.Gt\(\{source:\1,requestKind:\4\},\5\)/;
   const dynamicMatch = currentSource.match(dynamicRegex);
   if (dynamicMatch != null) {
-    const [, sourceVar, gitGuardVar, requestKindVar, callVar, operationContextVar] = dynamicMatch;
+    const [, sourceVar, gitGuardVar, guardFn, requestKindVar, callVar, operationContextVar] = dynamicMatch;
     return currentSource.replace(
       dynamicRegex,
-      `if(${sourceVar}==null){if(${gitGuardVar}.qt(${requestKindVar})){if(${requestKindVar}===\`git-origins\`)return ${operationContextVar}.Gt({source:\`${fallbackSource}\`,requestKind:${requestKindVar}},${callVar});throw Error(\`Missing git operation source for \${${requestKindVar}}\`)}return ${callVar}()}return ${operationContextVar}.Gt({source:${sourceVar},requestKind:${requestKindVar}},${callVar})`,
+      `if(${sourceVar}==null){if(${gitGuardVar}.${guardFn}(${requestKindVar})){if(${requestKindVar}===\`git-origins\`)return ${operationContextVar}.Gt({source:\`${fallbackSource}\`,requestKind:${requestKindVar}},${callVar});throw Error(\`Missing git operation source for \${${requestKindVar}}\`)}return ${callVar}()}return ${operationContextVar}.Gt({source:${sourceVar},requestKind:${requestKindVar}},${callVar})`,
     );
   }
 
@@ -735,8 +801,10 @@ function applyLinuxGitOriginsSourceFallbackPatch(currentSource) {
 
 module.exports = {
   applyBrowserUseNodeReplApprovalPatch,
-  applyLinuxAvatarOverlayMousePassthroughPatch,
+  applyLinuxBrowserUseIabVisibleOnCreatePatch,
+  applyLinuxChromeExtensionStatusPatch,
   applyLinuxExplicitIpcQuitPatch,
+  applyLinuxExplicitQuitPromptBypassPatch,
   applyLinuxExplicitTrayQuitPatch,
   applyLinuxFileManagerPatch,
   applyLinuxGitOriginsSourceFallbackPatch,
@@ -746,5 +814,6 @@ module.exports = {
   applyLinuxSetIconPatch,
   applyLinuxSingleInstancePatch,
   applyLinuxTrayPatch,
+  applyLinuxWillQuitDrainTimeoutPatch,
   applyLinuxWindowOptionsPatch,
 };

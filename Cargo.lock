@@ -459,6 +459,7 @@ dependencies = [
  "base64",
  "cosmic-protocols",
  "futures-util",
+ "libc",
  "rmcp",
  "schemars",
  "serde",

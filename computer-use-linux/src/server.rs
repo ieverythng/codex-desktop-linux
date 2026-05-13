@@ -25,8 +25,10 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 use std::{
     env,
+    io::Write,
+    os::unix::net::{UnixDatagram, UnixStream},
     path::PathBuf,
-    process::{Command, Output},
+    process::{Command, Output, Stdio},
     sync::{Arc, Mutex},
     thread,
     time::Duration,
@@ -476,6 +478,7 @@ impl ComputerUseLinux {
                 });
             }
         };
+
         if let Some(session) = self.cached_portal_pointer_session() {
             match portal_scroll(&session, target_point, direction, units).await {
                 Ok(()) => {
@@ -658,8 +661,7 @@ impl ComputerUseLinux {
                 });
             }
         };
-        let result = run_ydotool(&["type".to_string(), "--".to_string(), params.text])
-            .map(|output| vec![output]);
+        let result = run_ydotool_type_text(&params.text).map(|output| vec![output]);
         Json(action_result_with_focus(
             "type_text",
             result,
@@ -1852,41 +1854,83 @@ fn run_ydotool(args: &[String]) -> std::result::Result<Output, String> {
 
     match command.output() {
         Ok(output) if output.status.success() => Ok(output),
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let detail = if stderr.is_empty() { stdout } else { stderr };
-            Err(if detail.is_empty() {
-                format!("ydotool exited with {}", output.status)
-            } else {
-                detail
-            })
+        Ok(output) => Err(ydotool_output_error(output)),
+        Err(error) => Err(format!("failed to run ydotool: {error}")),
+    }
+}
+
+fn run_ydotool_type_text(text: &str) -> std::result::Result<Output, String> {
+    let mut command = Command::new("ydotool");
+    command.args(["type", "--file", "-"]);
+    if let Some(socket) = ydotool_socket() {
+        command.env("YDOTOOL_SOCKET", socket);
+    }
+    command.stdin(Stdio::piped());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+
+    match command.spawn() {
+        Ok(mut child) => {
+            if let Some(stdin) = child.stdin.as_mut() {
+                if let Err(error) = stdin.write_all(text.as_bytes()) {
+                    let _ = child.kill();
+                    return Err(format!("failed to write text to ydotool stdin: {error}"));
+                }
+            }
+            match child.wait_with_output() {
+                Ok(output) if output.status.success() => Ok(output),
+                Ok(output) => Err(ydotool_output_error(output)),
+                Err(error) => Err(format!("failed to wait for ydotool: {error}")),
+            }
         }
         Err(error) => Err(format!("failed to run ydotool: {error}")),
     }
 }
 
+fn ydotool_output_error(output: Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let detail = if stderr.is_empty() { stdout } else { stderr };
+    if detail.is_empty() {
+        format!("ydotool exited with {}", output.status)
+    } else {
+        detail
+    }
+}
+
 fn ydotool_socket() -> Option<String> {
+    connectable_ydotool_socket_from(ydotool_socket_candidates())
+        .map(|path| path.display().to_string())
+}
+
+fn ydotool_socket_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
     if let Ok(socket) = env::var("YDOTOOL_SOCKET") {
-        if !socket.trim().is_empty() {
-            return Some(socket);
+        let socket = socket.trim();
+        if !socket.is_empty() {
+            candidates.push(PathBuf::from(socket));
         }
     }
-
-    let candidates = [
-        env::var("XDG_RUNTIME_DIR")
-            .ok()
-            .map(PathBuf::from)
-            .or_else(|| user_id().map(|uid| PathBuf::from(format!("/run/user/{uid}"))))
-            .map(|runtime| runtime.join(".ydotool_socket")),
-        Some(PathBuf::from("/tmp/.ydotool_socket")),
-    ];
-
+    if let Some(runtime) = env::var("XDG_RUNTIME_DIR")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(|| user_id().map(|uid| PathBuf::from(format!("/run/user/{uid}"))))
+    {
+        candidates.push(runtime.join(".ydotool_socket"));
+    }
+    candidates.push(PathBuf::from("/tmp/.ydotool_socket"));
     candidates
-        .into_iter()
-        .flatten()
-        .find(|path| path.exists())
-        .map(|path| path.display().to_string())
+}
+
+fn connectable_ydotool_socket_from(candidates: Vec<PathBuf>) -> Option<PathBuf> {
+    candidates.into_iter().find(ydotool_socket_connects)
+}
+
+fn ydotool_socket_connects(path: &PathBuf) -> bool {
+    UnixStream::connect(path).is_ok()
+        || UnixDatagram::unbound()
+            .and_then(|socket| socket.connect(path))
+            .is_ok()
 }
 
 fn mouse_button_code(button: Option<&str>) -> String {
@@ -2637,6 +2681,48 @@ mod tests {
             key_sequence("Super"),
             Some(vec!["125:1".to_string(), "125:0".to_string()])
         );
+    }
+
+    #[test]
+    fn ydotool_socket_selection_skips_unconnectable_candidates() {
+        let dir =
+            std::env::temp_dir().join(format!("codex-computer-use-server-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp server dir");
+        let stale_socket = dir.join("stale.sock");
+        std::fs::write(&stale_socket, b"not a socket").expect("write stale socket placeholder");
+        let usable_socket = dir.join("usable.sock");
+        let listener =
+            std::os::unix::net::UnixListener::bind(&usable_socket).expect("bind usable socket");
+
+        let selected = connectable_ydotool_socket_from(vec![stale_socket, usable_socket.clone()])
+            .expect("usable socket should be selected");
+
+        assert_eq!(selected, usable_socket);
+        drop(listener);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ydotool_socket_selection_accepts_datagram_socket() {
+        let dir = std::env::temp_dir().join(format!(
+            "codex-computer-use-server-dgram-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp server dir");
+        let stale_socket = dir.join("stale.sock");
+        std::fs::write(&stale_socket, b"not a socket").expect("write stale socket placeholder");
+        let usable_socket = dir.join("usable.sock");
+        let datagram =
+            std::os::unix::net::UnixDatagram::bind(&usable_socket).expect("bind usable socket");
+
+        let selected = connectable_ydotool_socket_from(vec![stale_socket, usable_socket.clone()])
+            .expect("usable socket should be selected");
+
+        assert_eq!(selected, usable_socket);
+        drop(datagram);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

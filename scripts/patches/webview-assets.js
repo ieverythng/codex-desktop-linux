@@ -92,10 +92,25 @@ function applyBrowserAnnotationScreenshotPatch(currentSource) {
     "if(M&&j?.anchor.kind===`element`){he=md(j.anchor),_e=void 0}";
   if (patchedSource.includes(storedAnchorScreenshotPatch)) {
     // Already patched.
+  } else if (
+    /if\([A-Za-z_$][\w$]*&&[A-Za-z_$][\w$]*\?\.anchor\.kind===`element`\)\{[A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\.anchor\),[A-Za-z_$][\w$]*=void 0\}/.test(patchedSource)
+  ) {
+    // Already patched with the current upstream symbol names.
   } else if (patchedSource.includes(liveElementScreenshotNeedle)) {
     patchedSource = patchedSource.replace(liveElementScreenshotNeedle, storedAnchorScreenshotPatch);
   } else {
-    console.warn("WARN: Could not find browser annotation screenshot element highlight — skipping screenshot anchor patch");
+    const currentElementScreenshotRegex =
+      /if\(([A-Za-z_$][\w$]*)&&([A-Za-z_$][\w$]*)\?\.anchor\.kind===`element`\)\{let e=[^;{}]+?\?\?null,t=e==null\?null:[A-Za-z_$][\w$]*\(e\);([A-Za-z_$][\w$]*)=t\?\.rect\?\?([A-Za-z_$][\w$]*)\(\2\.anchor\),([A-Za-z_$][\w$]*)=t\?\.borderRadius\}/;
+    const currentElementScreenshotMatch = patchedSource.match(currentElementScreenshotRegex);
+    if (currentElementScreenshotMatch != null) {
+      const [, screenshotModeVar, selectedCommentVar, rectVar, anchorRectFn, radiusVar] = currentElementScreenshotMatch;
+      patchedSource = patchedSource.replace(
+        currentElementScreenshotRegex,
+        `if(${screenshotModeVar}&&${selectedCommentVar}?.anchor.kind===\`element\`){${rectVar}=${anchorRectFn}(${selectedCommentVar}.anchor),${radiusVar}=void 0}`,
+      );
+    } else {
+      console.warn("WARN: Could not find browser annotation screenshot element highlight — skipping screenshot anchor patch");
+    }
   }
 
   const allMarkersInScreenshotNeedle =
@@ -104,10 +119,20 @@ function applyBrowserAnnotationScreenshotPatch(currentSource) {
     "de=u?.target.mode===`create`?ce.find(e=>Sd(e.anchor,u.anchor.value))??null:null,fe=M?ue:!M&&de!=null?ce.filter(e=>e.id!==de.id):ce,";
   if (patchedSource.includes(selectedMarkerInScreenshotPatch)) {
     // Already patched.
+  } else if (/=\([A-Za-z_$][\w$]*\?[A-Za-z_$][\w$]*:![A-Za-z_$][\w$]*&&[A-Za-z_$][\w$]*!=null\?[A-Za-z_$][\w$]*\.filter\(e=>e\.id!==[A-Za-z_$][\w$]*\.id\):[A-Za-z_$][\w$]*\)\.flatMap/.test(patchedSource)) {
+    // Already patched with the current upstream symbol names.
   } else if (patchedSource.includes(allMarkersInScreenshotNeedle)) {
     patchedSource = patchedSource.replace(allMarkersInScreenshotNeedle, selectedMarkerInScreenshotPatch);
   } else {
-    console.warn("WARN: Could not find browser annotation screenshot markers — skipping screenshot marker patch");
+    const currentMarkersNeedle = "be=(!ge&&ye!=null?A.filter(e=>e.id!==ye.id):A).flatMap";
+    const currentMarkersPatch = "be=(ge?he:!ge&&ye!=null?A.filter(e=>e.id!==ye.id):A).flatMap";
+    if (patchedSource.includes(currentMarkersPatch)) {
+      // Already patched.
+    } else if (patchedSource.includes(currentMarkersNeedle)) {
+      patchedSource = patchedSource.replace(currentMarkersNeedle, currentMarkersPatch);
+    } else {
+      console.warn("WARN: Could not find browser annotation screenshot markers — skipping screenshot marker patch");
+    }
   }
 
   return patchedSource;

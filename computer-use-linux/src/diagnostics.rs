@@ -7,6 +7,8 @@ use serde::Serialize;
 use std::{
     collections::{BTreeMap, HashMap},
     env, fs,
+    fs::OpenOptions,
+    os::unix::net::{UnixDatagram, UnixStream},
     path::{Path, PathBuf},
     process::Command,
 };
@@ -409,12 +411,11 @@ fn check_from_backend_probe(probe: &registry::BackendProbe) -> Check {
 }
 
 fn input_report() -> InputReport {
-    let socket = ydotool_socket_path();
     InputReport {
         ydotool: command_path_check("ydotool"),
         ydotoold: process_check("ydotoold"),
-        ydotool_socket: path_check(&socket),
-        uinput: path_check(Path::new("/dev/uinput")),
+        ydotool_socket: ydotool_socket_check(),
+        uinput: read_write_path_check(Path::new("/dev/uinput")),
     }
 }
 
@@ -430,7 +431,7 @@ fn readiness_report(
     let can_focus_apps = windowing.can_focus_apps;
     let can_focus_windows = windowing.can_focus_windows;
     let can_send_development_input =
-        input.ydotool.ok && input.ydotoold.ok && input.ydotool_socket.ok && input.uinput.ok;
+        input.ydotool.ok && input.ydotoold.ok && input.ydotool_socket.ok;
 
     if !can_build_accessibility_tree {
         blockers.push(
@@ -457,7 +458,7 @@ fn readiness_report(
 
     if !can_send_development_input {
         blockers.push(
-            "Development input fallback is not fully available; ydotool, ydotoold, socket, and /dev/uinput are required."
+            "Development input fallback is unavailable; ydotool needs a running ydotoold daemon with a connectable ydotoold socket."
                 .to_string(),
         );
     }
@@ -477,7 +478,8 @@ fn readiness_report(
     } else if !can_focus_windows {
         "Enable an exact-focus window backend before using window_id, title, or terminal-targeted input.".to_string()
     } else if !can_send_development_input {
-        "Install and start ydotoold if development input fallback is needed.".to_string()
+        "Fix ydotool input access: start ydotoold with a socket accessible to this desktop user."
+            .to_string()
     } else {
         "Computer Use is ready: AT-SPI tree support, window targeting, and ydotool input fallback are available."
             .to_string()
@@ -537,24 +539,32 @@ fn dbus_session_address() -> Option<String> {
         })
 }
 
-fn ydotool_socket_path() -> PathBuf {
+fn ydotool_socket_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
     if let Some(value) = env_var("YDOTOOL_SOCKET") {
-        return PathBuf::from(value);
+        candidates.push(PathBuf::from(value));
     }
 
-    let runtime_socket = xdg_runtime_dir().map(|runtime| runtime.join(".ydotool_socket"));
-    let tmp_socket = PathBuf::from("/tmp/.ydotool_socket");
+    if let Some(runtime_socket) = xdg_runtime_dir().map(|runtime| runtime.join(".ydotool_socket")) {
+        candidates.push(runtime_socket);
+    }
+    candidates.push(PathBuf::from("/tmp/.ydotool_socket"));
+    candidates
+}
 
-    for candidate in [runtime_socket.as_ref(), Some(&tmp_socket)]
-        .into_iter()
-        .flatten()
-    {
-        if candidate.exists() {
-            return candidate.to_path_buf();
+fn ydotool_socket_check() -> Check {
+    let mut checked = Vec::new();
+    for candidate in ydotool_socket_candidates() {
+        match socket_connect_result(&candidate) {
+            Ok(()) => return Check::ok(format!("connectable: {}", candidate.display())),
+            Err(detail) => checked.push(detail),
         }
     }
 
-    runtime_socket.unwrap_or(tmp_socket)
+    Check::fail(format!(
+        "no connectable ydotool socket ({})",
+        checked.join("; ")
+    ))
 }
 
 fn user_id() -> Option<String> {
@@ -574,11 +584,43 @@ fn process_check(process_name: &str) -> Check {
     command_check("pgrep", &["-a", process_name])
 }
 
-fn path_check(path: &Path) -> Check {
-    if path.exists() {
-        Check::ok(path.display().to_string())
-    } else {
-        Check::fail(format!("missing: {}", path.display()))
+#[cfg(test)]
+fn socket_connect_check(path: &Path) -> Check {
+    match socket_connect_result(path) {
+        Ok(()) => Check::ok(format!("connectable: {}", path.display())),
+        Err(detail) => Check::fail(detail),
+    }
+}
+
+fn socket_connect_result(path: &Path) -> std::result::Result<(), String> {
+    if !path.exists() {
+        return Err(format!("missing: {}", path.display()));
+    }
+
+    match UnixStream::connect(path) {
+        Ok(_) => Ok(()),
+        Err(stream_error) => {
+            match UnixDatagram::unbound().and_then(|socket| socket.connect(path)) {
+                Ok(()) => Ok(()),
+                Err(datagram_error) => Err(format!(
+                    "{}: stream: {}; datagram: {}",
+                    path.display(),
+                    stream_error,
+                    datagram_error
+                )),
+            }
+        }
+    }
+}
+
+fn read_write_path_check(path: &Path) -> Check {
+    if !path.exists() {
+        return Check::fail(format!("missing: {}", path.display()));
+    }
+
+    match OpenOptions::new().read(true).write(true).open(path) {
+        Ok(_) => Check::ok(format!("read/write: {}", path.display())),
+        Err(error) => Check::fail(format!("{}: {error}", path.display())),
     }
 }
 
@@ -718,11 +760,20 @@ mod tests {
         } else {
             Check::fail("missing")
         };
+        input_report_parts(check.clone(), check.clone(), check.clone(), check)
+    }
+
+    fn input_report_parts(
+        ydotool: Check,
+        ydotoold: Check,
+        ydotool_socket: Check,
+        uinput: Check,
+    ) -> InputReport {
         InputReport {
-            ydotool: check.clone(),
-            ydotoold: check.clone(),
-            ydotool_socket: check.clone(),
-            uinput: check,
+            ydotool,
+            ydotoold,
+            ydotool_socket,
+            uinput,
         }
     }
 
@@ -821,6 +872,107 @@ mod tests {
         assert!(!readiness
             .recommended_next_step
             .contains("GNOME window targeting"));
+    }
+
+    #[test]
+    fn readiness_accepts_connectable_ydotool_socket_without_direct_uinput_access() {
+        let platform = platform_report();
+        let accessibility = accessibility_report(Check::ok("bus"), Check::ok("true"));
+        let windowing = windowing_report(true, true);
+        let input = input_report_parts(
+            Check::ok("ydotool"),
+            Check::ok("ydotoold"),
+            Check::ok("connectable: /tmp/.ydotool_socket"),
+            Check::fail("/dev/uinput: Permission denied"),
+        );
+
+        let readiness = readiness_report(&platform, &accessibility, &windowing, &input);
+
+        assert!(readiness.can_send_development_input);
+        assert!(readiness.blockers.is_empty());
+    }
+
+    #[test]
+    fn readiness_rejects_direct_uinput_without_connectable_ydotool_socket() {
+        let platform = platform_report();
+        let accessibility = accessibility_report(Check::ok("bus"), Check::ok("true"));
+        let windowing = windowing_report(true, true);
+        let input = input_report_parts(
+            Check::ok("ydotool"),
+            Check::fail("ydotoold not running"),
+            Check::fail("no connectable ydotool socket"),
+            Check::ok("read/write: /dev/uinput"),
+        );
+
+        let readiness = readiness_report(&platform, &accessibility, &windowing, &input);
+
+        assert!(!readiness.can_send_development_input);
+        assert!(readiness
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("connectable ydotoold socket")));
+    }
+
+    #[test]
+    fn readiness_rejects_inaccessible_ydotool_paths() {
+        let platform = platform_report();
+        let accessibility = accessibility_report(Check::ok("bus"), Check::ok("true"));
+        let windowing = windowing_report(true, true);
+        let input = input_report_parts(
+            Check::ok("ydotool"),
+            Check::ok("ydotoold"),
+            Check::fail("/tmp/.ydotool_socket: Permission denied"),
+            Check::fail("/dev/uinput: Permission denied"),
+        );
+
+        let readiness = readiness_report(&platform, &accessibility, &windowing, &input);
+
+        assert!(!readiness.can_send_development_input);
+        assert!(readiness
+            .recommended_next_step
+            .contains("Fix ydotool input access"));
+        assert!(readiness
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("connectable ydotoold socket")));
+    }
+
+    #[test]
+    fn ydotool_socket_check_requires_a_connectable_socket() {
+        let dir = std::env::temp_dir().join(format!(
+            "codex-computer-use-diagnostics-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp diagnostics dir");
+        let socket = dir.join("ydotool.sock");
+        let listener =
+            std::os::unix::net::UnixListener::bind(&socket).expect("bind temp diagnostics socket");
+
+        let check = socket_connect_check(&socket);
+
+        assert!(check.ok, "{check:?}");
+        drop(listener);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ydotool_socket_check_accepts_datagram_socket() {
+        let dir = std::env::temp_dir().join(format!(
+            "codex-computer-use-diagnostics-dgram-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp diagnostics dir");
+        let socket = dir.join("ydotool.sock");
+        let datagram =
+            std::os::unix::net::UnixDatagram::bind(&socket).expect("bind temp datagram socket");
+
+        let check = socket_connect_check(&socket);
+
+        assert!(check.ok, "{check:?}");
+        drop(datagram);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
