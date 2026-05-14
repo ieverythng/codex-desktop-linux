@@ -206,7 +206,7 @@ PACKAGE_WITH_UPDATER=0 make package
 make install
 ```
 
-That package omits `codex-update-manager`, the user service unit, updater polkit policy, `/opt/codex-desktop/update-builder`, desktop updater actions, and launcher updater startup checks. The packaged launcher still exports desktop-entry hints for window/icon association, but it does not enable, start, or probe the updater. Installing a no-updater package over a default package also stops and disables any existing `codex-update-manager.service` for active user managers.
+That package omits `codex-update-manager`, the user service unit, updater polkit policy, `/opt/codex-desktop/update-builder`, desktop updater actions, and launcher updater startup checks. The packaged launcher still exports desktop-entry hints for window/icon association, but it does not enable, start, or probe the updater. Installing a no-updater package over a default package also stops and disables any existing `codex-update-manager.service` for active user managers and removes stale per-user enablement links for inactive users.
 
 Manual updates should come from a checkout you have chosen to trust:
 

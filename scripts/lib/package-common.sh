@@ -149,8 +149,32 @@ codex_no_updater_cleanup_one_user_manager() {
     codex_no_updater_run_systemctl_user "$user_name" "$runtime_dir" "$bus" daemon-reload || true
 }
 
+codex_no_updater_cleanup_user_enablement_links() {
+    if ! command -v getent >/dev/null 2>&1 || ! command -v runuser >/dev/null 2>&1; then
+        return
+    fi
+
+    getent passwd | while IFS=: read -r user_name _ uid _ _ home _; do
+        case "$uid" in
+            ''|*[!0-9]*|0)
+                continue
+                ;;
+        esac
+
+        [ -n "$home" ] || continue
+        [ "$home" != "/" ] || continue
+
+        wants_dir="$home/.config/systemd/user/default.target.wants"
+        service_link="$wants_dir/$SERVICE_NAME"
+        [ -L "$service_link" ] || continue
+
+        runuser -u "$user_name" -- rm -f "$service_link" >/dev/null 2>&1 || true
+    done
+}
+
 codex_no_updater_cleanup_update_manager_service() {
     codex_no_updater_foreach_user_manager codex_no_updater_cleanup_one_user_manager
+    codex_no_updater_cleanup_user_enablement_links
 }
 SCRIPT
     chmod 0644 "$target"

@@ -291,14 +291,18 @@ run_deb_job() {
     deb_no_updater_file="$(package_file_or_fail 'codex-desktop_*.deb')"
     dpkg-deb -c "$deb_no_updater_file" | tee /tmp/deb-no-updater-contents.txt >/dev/null
     rm -rf /tmp/deb-no-updater-control
-    mkdir -p /tmp/deb-no-updater-control
+    rm -rf /tmp/deb-no-updater-payload
+    mkdir -p /tmp/deb-no-updater-control /tmp/deb-no-updater-payload
     dpkg-deb -e "$deb_no_updater_file" /tmp/deb-no-updater-control
+    dpkg-deb -x "$deb_no_updater_file" /tmp/deb-no-updater-payload
     assert_not_contains_file /tmp/deb-no-updater-contents.txt './usr/bin/codex-update-manager'
     assert_not_contains_file /tmp/deb-no-updater-contents.txt './usr/lib/systemd/user/codex-update-manager.service'
     assert_not_contains_file /tmp/deb-no-updater-contents.txt './usr/share/polkit-1/actions/com.github.ilysenko.codex-desktop-linux.update.policy'
     assert_not_contains_file /tmp/deb-no-updater-contents.txt './opt/codex-desktop/update-builder/'
     assert_contains_file /tmp/deb-no-updater-contents.txt './opt/codex-desktop/.codex-linux/codex-packaged-runtime.sh'
     assert_contains_file /tmp/deb-no-updater-contents.txt './opt/codex-desktop/.codex-linux/codex-no-updater-transition-cleanup.sh'
+    assert_contains_file /tmp/deb-no-updater-payload/opt/codex-desktop/.codex-linux/codex-no-updater-transition-cleanup.sh 'codex_no_updater_cleanup_user_enablement_links'
+    assert_contains_file /tmp/deb-no-updater-payload/opt/codex-desktop/.codex-linux/codex-no-updater-transition-cleanup.sh 'default.target.wants'
     assert_contains_file /tmp/deb-no-updater-control/postinst 'codex_no_updater_cleanup_update_manager_service'
     assert_contains_file /tmp/deb-no-updater-control/prerm 'codex_no_updater_cleanup_update_manager_service'
     assert_not_contains_file /tmp/deb-no-updater-control/postinst 'update-builder'
@@ -391,12 +395,15 @@ run_pacman_job() {
     pkg_no_updater_file="$(package_file_or_fail 'codex-desktop-*.pkg.tar.*')"
     pacman -Qlp "$pkg_no_updater_file" | tee /tmp/pacman-no-updater-contents.txt >/dev/null
     tar -xOf "$pkg_no_updater_file" .INSTALL | tee /tmp/pacman-no-updater-install.txt >/dev/null
+    tar -xOf "$pkg_no_updater_file" opt/codex-desktop/.codex-linux/codex-no-updater-transition-cleanup.sh | tee /tmp/pacman-no-updater-cleanup.txt >/dev/null
     assert_not_contains_file /tmp/pacman-no-updater-contents.txt 'usr/bin/codex-update-manager'
     assert_not_contains_file /tmp/pacman-no-updater-contents.txt 'usr/lib/systemd/user/codex-update-manager.service'
     assert_not_contains_file /tmp/pacman-no-updater-contents.txt 'usr/share/polkit-1/actions/com.github.ilysenko.codex-desktop-linux.update.policy'
     assert_not_contains_file /tmp/pacman-no-updater-contents.txt 'opt/codex-desktop/update-builder/'
     assert_contains_file /tmp/pacman-no-updater-contents.txt 'opt/codex-desktop/.codex-linux/codex-packaged-runtime.sh'
     assert_contains_file /tmp/pacman-no-updater-contents.txt 'opt/codex-desktop/.codex-linux/codex-no-updater-transition-cleanup.sh'
+    assert_contains_file /tmp/pacman-no-updater-cleanup.txt 'codex_no_updater_cleanup_user_enablement_links'
+    assert_contains_file /tmp/pacman-no-updater-cleanup.txt 'default.target.wants'
     assert_contains_file /tmp/pacman-no-updater-install.txt 'codex_no_updater_cleanup_update_manager_service'
     assert_contains_file /tmp/pacman-no-updater-install.txt 'post_upgrade'
     assert_contains_file /tmp/pacman-no-updater-install.txt 'pre_remove'

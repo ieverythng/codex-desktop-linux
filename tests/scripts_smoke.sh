@@ -291,10 +291,54 @@ SCRIPT
     assert_contains "$pkg_root/opt/codex-desktop/.codex-linux/codex-no-updater-transition-cleanup.sh" "stop \"\$SERVICE_NAME\""
     assert_contains "$pkg_root/opt/codex-desktop/.codex-linux/codex-no-updater-transition-cleanup.sh" "disable \"\$SERVICE_NAME\""
     assert_contains "$pkg_root/opt/codex-desktop/.codex-linux/codex-no-updater-transition-cleanup.sh" "daemon-reload"
+    assert_contains "$pkg_root/opt/codex-desktop/.codex-linux/codex-no-updater-transition-cleanup.sh" "codex_no_updater_cleanup_user_enablement_links"
+    assert_contains "$pkg_root/opt/codex-desktop/.codex-linux/codex-no-updater-transition-cleanup.sh" "default.target.wants"
     assert_contains "$pkg_root/DEBIAN/postinst" "codex_no_updater_cleanup_update_manager_service"
     assert_contains "$pkg_root/DEBIAN/prerm" "codex_no_updater_cleanup_update_manager_service"
     assert_not_contains "$pkg_root/DEBIAN/postinst" "update-builder"
     assert_not_contains "$pkg_root/DEBIAN/prerm" "update-builder"
+}
+
+test_no_updater_cleanup_helper_removes_inactive_user_enablement() {
+    info "Checking no-updater inactive user service cleanup"
+    local workspace="$TMP_DIR/no-updater-cleanup"
+    local bin_dir="$workspace/bin"
+    local helper="$workspace/codex-no-updater-transition-cleanup.sh"
+    local fake_home="$workspace/home/codexuser"
+    local service_link="$fake_home/.config/systemd/user/default.target.wants/codex-update-manager.service"
+
+    mkdir -p "$bin_dir" "$(dirname "$service_link")"
+    ln -s /usr/lib/systemd/user/codex-update-manager.service "$service_link"
+
+    render_no_updater_transition_cleanup_helper "$helper"
+
+    cat > "$bin_dir/getent" <<'SCRIPT'
+#!/usr/bin/env bash
+if [ "${1:-}" = "passwd" ]; then
+    printf 'codexuser:x:1000:1000::%s:/bin/sh\n' "$FAKE_HOME"
+fi
+SCRIPT
+    cat > "$bin_dir/runuser" <<'SCRIPT'
+#!/usr/bin/env bash
+if [ "${1:-}" = "-u" ]; then
+    shift 2
+fi
+if [ "${1:-}" = "--" ]; then
+    shift
+fi
+exec "$@"
+SCRIPT
+    cat > "$bin_dir/systemctl" <<'SCRIPT'
+#!/usr/bin/env bash
+exit 0
+SCRIPT
+    chmod +x "$bin_dir/getent" "$bin_dir/runuser" "$bin_dir/systemctl"
+
+    PATH="$bin_dir:$PATH" FAKE_HOME="$fake_home" sh -c \
+        '. "$1"; codex_no_updater_cleanup_update_manager_service' \
+        _ "$helper"
+
+    assert_file_not_exists "$service_link"
 }
 
 test_rpm_builder_smoke() {
@@ -304,8 +348,9 @@ test_rpm_builder_smoke() {
     local app_dir="$workspace/app"
     local dist_dir="$workspace/dist"
     local updater_bin="$workspace/codex-update-manager"
+    local capture_dir="$workspace/capture"
 
-    mkdir -p "$workspace" "$dist_dir"
+    mkdir -p "$workspace" "$dist_dir" "$capture_dir"
     make_stub_bin_dir "$bin_dir"
     make_fake_app "$app_dir"
     printf '#!/usr/bin/env bash\nexit 0\n' > "$updater_bin"
@@ -314,6 +359,7 @@ test_rpm_builder_smoke() {
     cat > "$bin_dir/rpmbuild" <<'SCRIPT'
 #!/usr/bin/env bash
 rpmdir=""
+spec_file="${@: -1}"
 while [ $# -gt 0 ]; do
     if [ "$1" = "--define" ]; then
         case "$2" in
@@ -325,6 +371,13 @@ while [ $# -gt 0 ]; do
     shift
 done
 [ -n "$rpmdir" ] || exit 1
+if [ -n "${CAPTURE_DIR:-}" ]; then
+    cp "$spec_file" "$CAPTURE_DIR/codex-desktop.spec"
+    staging_dir="$(sed -n 's|cp -a "\(.*\)/\." "%{buildroot}/"|\1|p' "$spec_file" | head -n 1)"
+    if [ -n "$staging_dir" ] && [ -d "$staging_dir" ]; then
+        cp -a "$staging_dir" "$CAPTURE_DIR/staging"
+    fi
+fi
 mkdir -p "$rpmdir/x86_64"
 touch "$rpmdir/x86_64/codex-desktop-2026.03.24.120000-deadbeef.x86_64.rpm"
 SCRIPT
@@ -343,6 +396,28 @@ SCRIPT
     bash "$REPO_DIR/scripts/build-rpm.sh"
 
     assert_file_exists "$dist_dir/codex-desktop-2026.03.24.120000-deadbeef.x86_64.rpm"
+
+    rm -rf "$dist_dir" "$capture_dir"
+    mkdir -p "$dist_dir" "$capture_dir"
+
+    PATH="$bin_dir:$PATH" \
+    CAPTURE_DIR="$capture_dir" \
+    APP_DIR_OVERRIDE="$app_dir" \
+    DIST_DIR_OVERRIDE="$dist_dir" \
+    PACKAGE_WITH_UPDATER=0 \
+    PACKAGE_VERSION="2026.03.24.120000+manual" \
+    bash "$REPO_DIR/scripts/build-rpm.sh"
+
+    assert_file_exists "$dist_dir/codex-desktop-2026.03.24.120000-manual.x86_64.rpm"
+    assert_file_exists "$capture_dir/codex-desktop.spec"
+    assert_file_exists "$capture_dir/staging/opt/codex-desktop/.codex-linux/codex-no-updater-transition-cleanup.sh"
+    assert_file_not_exists "$capture_dir/staging/usr/bin/codex-update-manager"
+    assert_file_not_exists "$capture_dir/staging/usr/lib/systemd/user/codex-update-manager.service"
+    assert_file_not_exists "$capture_dir/staging/usr/share/polkit-1/actions/com.github.ilysenko.codex-desktop-linux.update.policy"
+    assert_file_not_exists "$capture_dir/staging/opt/codex-desktop/update-builder"
+    assert_contains "$capture_dir/codex-desktop.spec" "%if 0"
+    assert_contains "$capture_dir/codex-desktop.spec" "codex_no_updater_cleanup_update_manager_service"
+    assert_contains "$capture_dir/staging/opt/codex-desktop/.codex-linux/codex-no-updater-transition-cleanup.sh" "codex_no_updater_cleanup_user_enablement_links"
 }
 
 test_pacman_builder_without_updater_transition_hook() {
@@ -2376,6 +2451,7 @@ main() {
     test_deb_builder_smoke
     test_deb_builder_respects_package_identity
     test_deb_builder_without_updater
+    test_no_updater_cleanup_helper_removes_inactive_user_enablement
     test_rpm_builder_smoke
     test_pacman_builder_without_updater_transition_hook
     test_missing_input_failure
