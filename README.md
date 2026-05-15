@@ -149,6 +149,12 @@ echo '{"codex-linux-computer-use-ui-enabled": true}' > ~/.config/codex-desktop/s
 
 Either path enables the in-app controls on subsequent builds. To opt back out, unset the env var and remove or set the settings flag to `false`.
 
+Nix users can also run the opt-in flake output directly:
+
+```bash
+nix run github:ilysenko/codex-desktop-linux#codex-desktop-computer-use-ui
+```
+
 ### Side-by-side dev variant
 
 If you'd like to test the backend without affecting your default install, the side-by-side dev variant builds a separate app under a different ID and webview port:

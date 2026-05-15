@@ -179,8 +179,9 @@ PY
           fi
         '';
 
-        codexDesktopPayload = pkgs.stdenv.mkDerivation {
-          pname = "codex-desktop-payload";
+        mkCodexDesktopPayload = { enableComputerUseUi ? false, outputHash }:
+        pkgs.stdenv.mkDerivation {
+          pname = if enableComputerUseUi then "codex-desktop-computer-use-ui-payload" else "codex-desktop-payload";
           version = "26.506.21252";
           src = sourceRoot;
           __structuredAttrs = true;
@@ -202,7 +203,7 @@ PY
 
           outputHashAlgo = "sha256";
           outputHashMode = "recursive";
-          outputHash = "sha256-SlGeq+nvuWRRPvKcy2OByUv7yLRmN4yK4Wg8WubJXMM=";
+          inherit outputHash;
           unsafeDiscardReferences.out = true;
 
           dontConfigure = true;
@@ -219,6 +220,9 @@ PY
             export CARGO_HOME="$TMPDIR/cargo-home"
             export CARGO_BUILD_JOBS=1
             export SOURCE_DATE_EPOCH=1
+            ${pkgs.lib.optionalString enableComputerUseUi ''
+            export CODEX_LINUX_ENABLE_COMPUTER_USE_UI=1
+            ''}
             export CFLAGS="''${CFLAGS:-} -ffile-prefix-map=$TMPDIR=/build -fdebug-prefix-map=$TMPDIR=/build -fmacro-prefix-map=$TMPDIR=/build"
             export CXXFLAGS="''${CXXFLAGS:-} -ffile-prefix-map=$TMPDIR=/build -fdebug-prefix-map=$TMPDIR=/build -fmacro-prefix-map=$TMPDIR=/build"
             export RUSTFLAGS="''${RUSTFLAGS:-} --remap-path-prefix=$TMPDIR=/build -C link-arg=-Wl,--build-id=none"
@@ -244,18 +248,6 @@ PY
             export CODEX_INSTALL_DIR="$out/opt/codex-desktop"
             ${pkgs.bash}/bin/bash "$source_dir/install.sh" "$source_dir/Codex.dmg"
 
-            rm -rf "$CODEX_INSTALL_DIR/resources/plugins/openai-bundled/plugins/computer-use"
-            marketplace="$CODEX_INSTALL_DIR/resources/plugins/openai-bundled/.agents/plugins/marketplace.json"
-            if [ -f "$marketplace" ]; then
-              node - "$marketplace" <<'NODE'
-              const fs = require("fs");
-              const marketplacePath = process.argv[2];
-              const marketplace = JSON.parse(fs.readFileSync(marketplacePath, "utf8"));
-              marketplace.plugins = (marketplace.plugins || []).filter((plugin) => plugin.name !== "computer-use");
-              fs.writeFileSync(marketplacePath, JSON.stringify(marketplace, null, 2) + "\n");
-NODE
-            fi
-
             asar extract "$CODEX_INSTALL_DIR/resources/app.asar" "$CODEX_INSTALL_DIR/resources/app-extracted"
             rm -f "$CODEX_INSTALL_DIR/resources/app.asar"
             rm -rf "$CODEX_INSTALL_DIR/resources/app.asar.unpacked"
@@ -266,10 +258,20 @@ NODE
           '';
         };
 
-        codexDesktop = pkgs.stdenv.mkDerivation {
-          pname = "codex-desktop";
+        codexDesktopPayload = mkCodexDesktopPayload {
+          outputHash = "sha256-oikRvP+7uKLnue/Kt2QYi62+SGshTa+pa/bGgDF0/MU=";
+        };
+
+        codexDesktopComputerUseUiPayload = mkCodexDesktopPayload {
+          enableComputerUseUi = true;
+          outputHash = "sha256-bOjhutEpccYUYl3SfFhNoNOVZJKnsVaYeIVOANcA+a8=";
+        };
+
+        mkCodexDesktop = { pname ? "codex-desktop", payload }:
+        pkgs.stdenv.mkDerivation {
+          inherit pname;
           version = "26.506.21252";
-          src = codexDesktopPayload;
+          src = payload;
 
           nativeBuildInputs = [
             pkgs.asar
@@ -328,12 +330,21 @@ NODE
           '';
 
           meta = {
-            description = "Codex Desktop for Linux";
+            description = if pname == "codex-desktop-computer-use-ui" then "Codex Desktop for Linux with Computer Use UI enabled" else "Codex Desktop for Linux";
             homepage = "https://github.com/ilysenko/codex-desktop-linux";
             license = pkgs.lib.licenses.mit;
             platforms = pkgs.lib.platforms.linux;
             mainProgram = "codex-desktop";
           };
+        };
+
+        codexDesktop = mkCodexDesktop {
+          payload = codexDesktopPayload;
+        };
+
+        codexDesktopComputerUseUi = mkCodexDesktop {
+          pname = "codex-desktop-computer-use-ui";
+          payload = codexDesktopComputerUseUiPayload;
         };
 
         installer = pkgs.writeShellApplication {
@@ -381,6 +392,7 @@ NODE
         packages = {
           default = codexDesktop;
           codex-desktop = codexDesktop;
+          codex-desktop-computer-use-ui = codexDesktopComputerUseUi;
           installer = installer;
         };
 
@@ -392,6 +404,11 @@ NODE
         apps.installer = {
           type = "app";
           program = "${installer}/bin/codex-desktop-installer";
+        };
+
+        apps.codex-desktop-computer-use-ui = {
+          type = "app";
+          program = "${codexDesktopComputerUseUi}/bin/codex-desktop";
         };
 
         devShells.default = pkgs.mkShell {
