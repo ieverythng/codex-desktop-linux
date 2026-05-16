@@ -259,12 +259,12 @@ PY
         };
 
         codexDesktopPayload = mkCodexDesktopPayload {
-          outputHash = "sha256-g5CiymY1yI+/III/xR/7hHereLOftKNtT7dCdlkm+Zk=";
+          outputHash = "sha256-3/gGqIvTUeRvVCXGSoR2XQZMpFp4ITbg0jd1DHLplag=";
         };
 
         codexDesktopComputerUseUiPayload = mkCodexDesktopPayload {
           enableComputerUseUi = true;
-          outputHash = "sha256-jwaHbuY24vrgWFqTGHwLukyfcWYPbyQpT66+HJnLS4g=";
+          outputHash = "sha256-6jei8/oqOA7v7jaxr4z5VwEIOWfUlqn/+/ge2NsPN0c=";
         };
 
         mkCodexDesktop = { pname ? "codex-desktop", payload }:
