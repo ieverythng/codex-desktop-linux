@@ -9,6 +9,7 @@ const {
   enabledLinuxFeatureIds,
   enabledLinuxFeatureStageHooks,
   loadEnabledLinuxFeatures,
+  loadLinuxFeaturePatchDescriptors,
   loadLinuxFeatureMainBundlePatches,
 } = require("./lib/linux-features.js");
 const {
@@ -21,6 +22,10 @@ const {
   applyLinuxAppUpdaterMenuPatch,
   patchLinuxAppUpdaterBridge,
 } = require("./lib/linux-update-bridge-patch.js");
+const {
+  applyLinuxMultiInstanceBootstrapPatch,
+  patchLinuxMultiInstanceBootstrap,
+} = require("./patches/bootstrap.js");
 const {
   applyLinuxChromePluginAutoInstallPatch,
 } = require("./patches/chrome-plugin.js");
@@ -59,6 +64,8 @@ const {
   applyLinuxMenuPatch,
   applyLinuxOpaqueBackgroundPatch,
   applyLinuxQuitGuardPatch,
+  applyLinuxReadyToShowWindowStatePatch,
+  applyLinuxRemoteControlConfigPreservationPatch,
   applyLinuxSetIconPatch,
   applyLinuxSingleInstancePatch,
   applyLinuxTrayPatch,
@@ -87,6 +94,7 @@ const {
   applyBrowserAnnotationScreenshotPatch,
   applyLinuxAppSunsetPatch,
   applyLinuxOpaqueWindowsDefaultPatch,
+  applySubagentNicknameMetadataPatch,
   patchCommentPreloadBundle,
 } = require("./patches/webview-assets.js");
 
@@ -156,9 +164,12 @@ module.exports = {
   applyLinuxKeybindOverridesRuntimePatch,
   applyLinuxLaunchActionArgsPatch,
   applyLinuxMenuPatch,
+  applyLinuxMultiInstanceBootstrapPatch,
   applyLinuxOpaqueBackgroundPatch,
   applyLinuxOpaqueWindowsDefaultPatch,
   applyLinuxQuitGuardPatch,
+  applyLinuxReadyToShowWindowStatePatch,
+  applyLinuxRemoteControlConfigPreservationPatch,
   applyLinuxSetIconPatch,
   applyLinuxSettingsPersistencePatch,
   applyLinuxSingleInstancePatch,
@@ -166,6 +177,7 @@ module.exports = {
   applyLinuxTrayPatch,
   applyLinuxWillQuitDrainTimeoutPatch,
   applyLinuxWindowOptionsPatch,
+  applySubagentNicknameMetadataPatch,
   createPatchReport,
   corePatchDescriptors,
   createMainBundleContext,
@@ -177,12 +189,14 @@ module.exports = {
   legacyCorePatchDescriptors,
   linuxTargetSummary,
   loadEnabledLinuxFeatures,
+  loadLinuxFeaturePatchDescriptors,
   loadLinuxFeatureMainBundlePatches,
   normalizePatchDescriptors,
   parseOsRelease,
   patchCommentPreloadBundle,
   patchExtractedApp,
   patchKeybindsSettingsAssets,
+  patchLinuxMultiInstanceBootstrap,
   patchLinuxAppUpdaterBridge,
   patchMainBundleSource,
   patchPackageJson,

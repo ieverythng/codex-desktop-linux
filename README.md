@@ -1,6 +1,6 @@
 # Codex Desktop for Linux
 
-Unofficial Linux build of [OpenAI Codex Desktop](https://openai.com/codex/). The official Codex Desktop app is macOS-only — this project converts the upstream macOS `Codex.dmg` into a runnable Linux Electron app, ships native `.deb` / `.rpm` / `.pkg.tar.zst` packages plus a Nix flake, and includes a local auto-updater that rebuilds future Linux packages from newer upstream DMGs.
+Unofficial Linux build of [OpenAI Codex Desktop](https://openai.com/codex/). The official Codex Desktop app is macOS-only — this project converts the upstream macOS `Codex.dmg` into a runnable Linux Electron app, ships native `.deb` / `.rpm` / `.pkg.tar.zst` packages plus local AppImage self-builds and a Nix flake, and includes a local auto-updater that rebuilds future native Linux packages from newer upstream DMGs.
 
 Before opening a pull request, please read [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -17,6 +17,7 @@ Optional Linux-only additions live in `linux-features/`. Use them for integratio
 | Fedora < 41 | `dnf` | `.rpm` | |
 | openSUSE Tumbleweed / Leap | `zypper` | `.rpm` | Uses `zypper --no-gpg-checks install` for the local rebuild |
 | Arch, Manjaro, EndeavourOS | `pacman` | `.pkg.tar.zst` | |
+| Atomic desktops / other Linux distros | none | `.AppImage` | Local self-build only; no bundled auto-updater |
 | NixOS / Nix | flake | runnable directly | `nix run github:ilysenko/codex-desktop-linux` |
 
 Anything systemd-based should work for the optional auto-updater service (`systemd --user`). The launcher targets Wayland with `XWayland` first (better Electron popup positioning); pure Wayland sessions fall through to `--ozone-platform-hint=auto`. X11 is fully supported.
@@ -26,13 +27,17 @@ Anything systemd-based should work for the optional auto-updater service (`syste
 | Feature | Status | Notes |
 |---|---|---|
 | Standard Codex Desktop UI | ✅ always | Chats, browser, files, MCP plugins |
-| Auto-updater (`codex-update-manager`) | ✅ always | Detects newer upstream DMGs, rebuilds + installs locally |
+| Auto-updater (`codex-update-manager`) | ✅ native packages | Detects newer upstream DMGs, rebuilds + installs native packages locally |
 | Native packaging (`.deb` / `.rpm` / `.pkg.tar.zst`) | ✅ always | One-shot `make package` picks your distro |
+| AppImage self-build | ✅ manual | `make appimage` writes a local `dist/*.AppImage`; rebuild manually after upstream updates |
 | Linux tray + warm-start handoff | ✅ always | Single-instance lock, second-instance window focus |
+| Multi-instance launcher | 🧪 opt-in | `--new-instance` or `CODEX_MULTI_LAUNCH=1` allocates a bounded webview port and isolated Electron profile |
 | GUI install prompts (`kdialog` / `zenity`) | ✅ if installed | Falls back to interactive terminal prompt |
 | Linux browser annotations | ✅ always | Stored-anchor screenshots, isolated marker rendering |
 | Chrome plugin native host | ✅ always | Auto-installs the upstream Chrome plugin plus Linux native-messaging support for Chrome, Brave, and Chromium |
 | Linux Computer Use | ⚠️ opt-in | MCP backend registers by default; the in-app UI is opt-in. Supports screenshots, accessibility, window targeting, and input synthesis |
+| Linux Read Aloud | 🧪 opt-in experiment | `linux-features/read-aloud` adds an explicit response speaker button; `linux-features/read-aloud-mcp` stages a separate MCP plugin so the agent can read text aloud on request |
+| Mobile remote control host | 🧪 opt-in experiment | SSH remote projects work normally. Phone/Android host access is upstream macOS-only by default; `linux-features/remote-mobile-control` adds experimental Linux device-key, visibility, and host-enablement patches |
 | Server-gated features (e.g. `gpt-5.5`) | 🟡 server-side | OpenAI rolls per-account, not project-controlled. Building a fresh package does not unlock these. |
 
 ## Before you install
@@ -61,13 +66,85 @@ The fastest path: install deps, build the local app, build the native package, i
 ```bash
 git clone https://github.com/ilysenko/codex-desktop-linux.git
 cd codex-desktop-linux
-bash scripts/install-deps.sh
-make build-app
-make package        # auto-detects deb / rpm / pacman
-make install        # installs the newest package from dist/
+make bootstrap-native
 ```
 
-`make package` picks the format that matches your distro. `make install` then runs the right `dpkg -i` / `dnf install` / `zypper install` / `pacman -U` against the freshly built artifact.
+`make bootstrap-native` installs build dependencies, regenerates `codex-app/` from a fresh upstream `Codex.dmg`, builds the matching native package, and installs the newest artifact from `dist/`. It uses the same package auto-detection as `make package` / `make install`.
+
+If dependencies are already installed, use `make install-native` to run only the fresh app build, package, and install steps.
+
+## Guided native setup
+
+If you want a friendlier first-run checklist before building, use the optional guided setup helper:
+
+```bash
+git clone https://github.com/ilysenko/codex-desktop-linux.git
+cd codex-desktop-linux
+make setup-native
+```
+
+`make setup-native` is intentionally separate from `make bootstrap-native`, `make install-native`, `make package`, and `make install`, which remain non-interactive for scripts and CI. The guided helper detects your distro, package manager, native package format, desktop session, GUI prompt helpers, `pkexec`, portal status, and Computer Use readiness signals such as `ydotool`, `ydotoold` / `ydotool.service`, the ydotool socket, `/dev/uinput`, input-group membership, desktop window backend hints, and portal package hints. It also reports Read Aloud Kokoro paths, plugin cache paths, settings paths, and doctor commands when available.
+
+It also discovers optional Linux features from `linux-features/*/feature.json` and can write the git-ignored `linux-features/features.json` file for the next build. Re-running it shows the currently enabled features and installed package/updater hints, then skips changes unless you ask for them. Non-interactive setup edits feature config and prints or runs explicitly requested next steps; it does not implicitly run build/package/install.
+
+For repeatable setup docs or automation, pass feature choices through the environment:
+
+```bash
+CODEX_LINUX_FEATURES=remote-mobile-control,read-aloud \
+CODEX_LINUX_DISABLE_FEATURES=conversation-mode \
+PACKAGE_WITH_UPDATER=0 \
+CODEX_BOOTSTRAP_NONINTERACTIVE=1 \
+make setup-native
+```
+
+To have the wizard orchestrate the existing native install commands, opt in explicitly:
+
+```bash
+# Preview without changing the system:
+CODEX_BOOTSTRAP_DRY_RUN=1 \
+CODEX_BOOTSTRAP_INSTALL_DEPS=1 \
+CODEX_BOOTSTRAP_INSTALL_NATIVE=1 \
+make setup-native
+
+# Run dependency bootstrap and then build/package/install:
+CODEX_BOOTSTRAP_INSTALL_DEPS=1 \
+CODEX_BOOTSTRAP_INSTALL_NATIVE=1 \
+make setup-native
+
+# Build a manual-update native package instead:
+PACKAGE_WITH_UPDATER=0 \
+CODEX_BOOTSTRAP_INSTALL_NATIVE=1 \
+make setup-native
+```
+
+Build-time feature changes only apply after rebuilding and reinstalling:
+
+```bash
+make install-native
+
+# or, for manual-update native packages:
+PACKAGE_WITH_UPDATER=0 make install-native
+```
+
+The wizard is conservative with opt-outs. Removing a feature id from `features.json` does not delete local device keys, Read Aloud model files, Python runtimes, plugin caches, or system services. Cleanup is a separate interactive path through `CODEX_BOOTSTRAP_CLEANUP_FEATURES=remote-mobile-control,read-aloud make setup-native`; each deletion requires typing `DELETE <exact path>`, and `CODEX_BOOTSTRAP_DRY_RUN=1` prints the cleanup targets without deleting them. It prints the relevant paths and tells you when a rebuild/reinstall, `sudo` / `pkexec`, logout/login, input-group membership, ydotoold service work, or portal package install needs explicit user action.
+
+### AppImage local self-build
+
+For atomic desktops or systems where installing a native package is awkward, build an AppImage locally from the generated app:
+
+```bash
+make build-app
+make appimage
+./dist/codex-desktop-*.AppImage
+```
+
+The AppImage flow does not include `codex-update-manager`, the systemd user service, polkit policy, or the native-package update builder. When upstream Codex Desktop changes, update your checkout and rebuild locally:
+
+```bash
+git pull --ff-only
+make build-app-fresh
+make appimage
+```
 
 ### NixOS / Nix one-liner
 
@@ -75,9 +152,33 @@ make install        # installs the newest package from dist/
 nix run github:ilysenko/codex-desktop-linux
 ```
 
-The flake handles dependencies and patches Electron for NixOS. A GitHub Actions bot refreshes the upstream `Codex.dmg` and recursive Nix payload hashes in `main`; if you hit a hash mismatch right after an upstream release, wait for the next bot run and retry.
+The flake handles dependencies and patches Electron for NixOS. A GitHub Actions bot refreshes the upstream `Codex.dmg` hash and verifies the Nix package outputs in `main`; if you hit a hash mismatch right after an upstream release, wait for the next bot run and retry.
+
+Because flakes do not include the git-ignored `linux-features/features.json` opt-in file, Nix exposes feature-specific app variants for optional integrations. To build and run Codex Desktop with the experimental mobile remote-control feature enabled:
+
+```bash
+nix run github:ilysenko/codex-desktop-linux#remote-mobile-control
+```
+
+Feature-specific Nix outputs are additive. To enable both the Computer Use UI and experimental mobile remote control:
+
+```bash
+nix run github:ilysenko/codex-desktop-linux#computer-use-ui-remote-mobile-control
+```
 
 `nix develop github:ilysenko/codex-desktop-linux` enters a dev shell with the required tooling.
+
+### Cachix binary cache
+
+CI can populate a Cachix cache named `codex-desktop-linux` for the flake package outputs. To enable pushes, create that cache in Cachix and add a repository secret named `CACHIX_AUTH_TOKEN` with write access to the cache.
+
+After the cache exists, users can opt in locally with:
+
+```bash
+cachix use codex-desktop-linux
+```
+
+The scheduled `Populate Cachix` workflow builds the default Codex Desktop package, the feature-specific Nix package variants, and `.#installer`. The upstream-hash refresh workflow also uploads its verification build when the token is present.
 
 ## Linux Computer Use
 
@@ -113,7 +214,14 @@ sudo systemctl enable --now ydotoold
 sudo usermod -a -G input "$USER"
 ```
 
-Some distros install `/usr/bin/ydotoold` without a service unit. If `systemctl enable --now ydotoold` fails, create or install a distro-appropriate unit. If `doctor` reports `ydotool_socket: Permission denied`, make sure the socket is usable by users in the `input` group.
+On Fedora 44, the packaged unit is commonly named `ydotool.service` rather than `ydotoold.service`. Some distros install `/usr/bin/ydotoold` without any service unit. If `systemctl enable --now ydotoold` fails, start the distro-provided unit instead or create a user-session service that binds `%t/.ydotool_socket`. If `doctor` reports `ydotool_socket: Permission denied`, make sure the socket is usable by users in the `input` group.
+
+If you are on Fedora + KDE Plasma and the system unit path is awkward, a user-session `ydotoold` service is also a valid setup. In that case, make sure:
+
+- the socket is reachable at `%t/.ydotool_socket`
+- the service runs inside your user session
+- old system-level overrides are removed if they force the wrong socket path
+- `codex-computer-use-linux doctor` reports `can_send_development_input: true`
 
 A working XDG Desktop Portal implementation is needed if you are not on GNOME — `xdg-desktop-portal-kde` for KDE Plasma, `xdg-desktop-portal-wlr` for sway / Hyprland, or your distro's preferred portal backend for i3. GNOME ships a working portal by default.
 
@@ -148,6 +256,18 @@ echo '{"codex-linux-computer-use-ui-enabled": true}' > ~/.config/codex-desktop/s
 
 Either path enables the in-app controls on subsequent builds. To opt back out, unset the env var and remove or set the settings flag to `false`.
 
+Nix users can also run the opt-in flake output directly:
+
+```bash
+nix run github:ilysenko/codex-desktop-linux#codex-desktop-computer-use-ui
+```
+
+The Computer Use UI output can also be combined with Linux feature outputs, for example:
+
+```bash
+nix run github:ilysenko/codex-desktop-linux#computer-use-ui-remote-mobile-control
+```
+
 ### Side-by-side dev variant
 
 If you'd like to test the backend without affecting your default install, the side-by-side dev variant builds a separate app under a different ID and webview port:
@@ -159,9 +279,26 @@ make run-dev-app
 
 Override the dev identity with `DEV_APP_ID`, `DEV_APP_NAME`, and `CODEX_WEBVIEW_PORT` if needed.
 
+### Multiple app instances
+
+By default, second launches reuse the running app through the Linux warm-start handoff. To intentionally open another independent Codex Desktop process, use:
+
+```bash
+./codex-app/start.sh --new-instance
+```
+
+The launcher picks the first free webview port from a bounded range, then uses per-port pid files, launch socket, log, and Electron user-data dir. This keeps Electron's single-instance lock scoped to that new instance while leaving normal launches unchanged. The default range allows up to five instances.
+
+Configure the range or make every launch use this mode with:
+
+```bash
+CODEX_MULTI_LAUNCH_PORT_RANGE=5175-5199 ./codex-app/start.sh --new-instance
+CODEX_MULTI_LAUNCH=1 CODEX_MULTI_LAUNCH_PORT_RANGE=5175-5199 ./codex-app/start.sh
+```
+
 ## Auto-update Manager
 
-The native package installs a companion `systemd --user` service named `codex-update-manager`.
+By default, the native package installs a companion `systemd --user` service named `codex-update-manager`.
 
 - It checks upstream `Codex.dmg` on daemon startup, every 6 hours, and in the background on app launch when stale.
 - When a new DMG is available, it rebuilds a local native package with `/opt/codex-desktop/update-builder`.
@@ -196,6 +333,25 @@ Runtime files live in standard XDG locations:
 ~/.cache/codex-desktop/launcher.log
 ~/.local/state/codex-desktop/app.pid
 ```
+
+### Manual-update packages
+
+For installs that must not include a resident updater, build the native package with:
+
+```bash
+PACKAGE_WITH_UPDATER=0 make package
+make install
+```
+
+That package omits `codex-update-manager`, the user service unit, updater polkit policy, `/opt/codex-desktop/update-builder`, desktop updater actions, and launcher updater startup checks. The packaged launcher still exports desktop-entry hints for window/icon association, but it does not enable, start, or probe the updater. Installing a no-updater package over a default package also stops and disables any existing `codex-update-manager.service` for active user managers and removes stale per-user enablement links for inactive users.
+
+Manual updates should come from a checkout you have chosen to trust:
+
+```bash
+PACKAGE_WITH_UPDATER=0 make update-native
+```
+
+`make update-native` runs `git pull --ff-only`, regenerates `codex-app/` from a fresh upstream `Codex.dmg`, builds the native package, and installs it. Keep `PACKAGE_WITH_UPDATER=0` when you want the installed package to stay in manual-update mode.
 
 ## Build from source / custom DMG
 
@@ -253,7 +409,8 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 This produces `codex-app/` from the upstream DMG and writes the Linux launcher to `codex-app/start.sh`:
 
 ```bash
-make build-app                              # downloads upstream DMG
+make build-app                              # download upstream DMG if no cached Codex.dmg exists
+make build-app-fresh                        # remove codex-app/ + cached Codex.dmg, then download current upstream DMG
 make build-app DMG=/path/to/Codex.dmg       # use a local copy
 make run-app                                # launches the generated app
 ```
@@ -269,7 +426,7 @@ Equivalent direct commands:
 
 ### Electron download mirrors
 
-`make build-app` downloads Electron headers while rebuilding native modules, then downloads a Linux Electron runtime. If the runtime download from GitHub is slow or blocked, use a mirror:
+The app build commands download Electron headers while rebuilding native modules, then download a Linux Electron runtime. If the runtime download from GitHub is slow or blocked, use a mirror:
 
 ```bash
 ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ \
@@ -278,26 +435,27 @@ make build-app
 
 `ELECTRON_HEADERS_URL` is passed to `@electron/rebuild --dist-url` and must provide both `node-v<version>-headers.tar.gz` and the matching `SHASUMS256.txt`.
 
-## Native package formats
+## Package formats
 
-After `make build-app`, build a native package from `codex-app/` with the format you need:
+After `make build-app` or `make build-app-fresh`, build a native package from `codex-app/` with the format you need:
 
 | Format | Build command | Output | Install |
 |---|---|---|---|
 | Debian | `make deb` or `./scripts/build-deb.sh` | `dist/codex-desktop_*.deb` | `sudo dpkg -i dist/codex-desktop_*.deb` |
 | RPM (Fedora / openSUSE) | `make rpm` or `./scripts/build-rpm.sh` | `dist/codex-desktop-*.x86_64.rpm` | `sudo dnf install dist/codex-desktop-*.rpm` (Fedora) or `sudo zypper install dist/codex-desktop-*.rpm` (openSUSE) |
 | Arch (pacman) | `make pacman` or `./scripts/build-pacman.sh` | `dist/codex-desktop-*.pkg.tar.zst` | `sudo pacman -U dist/codex-desktop-*.pkg.tar.zst` |
+| AppImage | `make appimage` or `./scripts/build-appimage.sh` | `dist/codex-desktop-*.AppImage` | Run directly; no system install |
 | Auto-detect | `make package && make install` | matches your distro | handled by `make install` |
 
-Override the package version with `PACKAGE_VERSION=YYYY.MM.DD.HHMMSS+commitish ./scripts/build-*.sh`.
+Override the package version with `PACKAGE_VERSION=YYYY.MM.DD.HHMMSS+commitish ./scripts/build-*.sh`. AppImage builds require `appimagetool` on `PATH`, or `APPIMAGETOOL=/path/to/appimagetool`.
 
 The packaging scripts only repackage what's already in `codex-app/`. They do not download or extract the DMG themselves.
 
-Native packages bundle the managed Node.js runtime and do not hard-depend on distro `nodejs` / `npm`. Packages still pull in `polkit` (or `policykit-1` on older Debian/Ubuntu) plus `pkexec` for privileged update installs.
+Native packages bundle the managed Node.js runtime and do not hard-depend on distro `nodejs` / `npm`. Packages built with the default updater pull in `polkit` (or `policykit-1` on older Debian/Ubuntu) plus `pkexec` for privileged update installs; `PACKAGE_WITH_UPDATER=0` packages do not install those updater-specific artifacts.
 
 ### Updater service controls
 
-After installing a native package:
+After installing a default native package with the updater enabled:
 
 ```bash
 make service-enable           # enable + start the systemd --user service
@@ -315,12 +473,17 @@ make check
 make test
 make build-updater
 make build-app
+make build-app-fresh
+make bootstrap-native
+make install-native
+make update-native
 make run-app
 make build-dev-app
 make run-dev-app
 make deb
 make rpm
 make pacman
+make appimage
 make package           # auto-detect distro
 make install           # install latest dist/ artifact
 make service-enable
@@ -338,13 +501,14 @@ make clean-state
 | `ERR_CONNECTION_REFUSED` on the webview port | The webview HTTP server failed to start. Ensure `python3` works and the configured port is free |
 | Stuck on Codex logo splash | Check `~/.cache/codex-desktop/launcher.log`. If webview origin validation failed, another process is probably serving the configured webview port or the extracted `content/webview/` bundle is incomplete |
 | `CODEX_CLI_PATH` error | Reopen the app to retry the automatic CLI install flow, or install manually with `npm i -g @openai/codex` / `npm i -g --prefix ~/.local @openai/codex` |
+| `gh auth status` works in a terminal but fails inside Codex Desktop | The app shell may be using isolated XDG paths or missing keyring DBus access. See [GitHub CLI auth in app-launched shells](docs/github-cli-auth.md) |
 | Electron hangs while CLI is outdated | Re-run the launcher and check `~/.cache/codex-desktop/launcher.log` plus `~/.local/state/codex-update-manager/service.log`. Best-effort CLI preflight will warn if the automatic refresh fails |
-| GPU / Vulkan / Wayland errors | Under Wayland with `DISPLAY` available, the launcher uses `--ozone-platform=x11` for window-positioning compatibility. Otherwise it uses `--ozone-platform-hint=auto`. GPU sandbox / compositing are disabled by default |
-| Window flickering | GPU compositing is disabled by default. If flickering persists, try `./codex-app/start.sh --disable-gpu` to fully disable GPU acceleration |
+| GPU / Vulkan / Wayland errors | Under Wayland with `DISPLAY` available, the launcher uses `--ozone-platform=x11` for window-positioning compatibility. Otherwise it uses `--ozone-platform-hint=auto`. The GPU sandbox is disabled by default, while GPU compositing stays enabled |
+| Window flickering | Try `CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=1 ./codex-app/start.sh` to use the legacy compositing workaround. If flickering persists, try `./codex-app/start.sh --disable-gpu` to fully disable GPU acceleration |
 | Sandbox errors | The launcher already sets `--no-sandbox` |
-| Stale install / cached DMG | `./install.sh --fresh` removes the existing install dir and re-downloads |
+| Stale install / cached DMG | `make build-app-fresh` removes the existing install dir and cached DMG, then re-downloads |
 | Computer Use plugin invisible in UI | Ensure you enabled the Computer Use UI. If it is enabled and still hidden, the OpenAI per-account rollout may not be available |
-| Computer Use `doctor` reports `ydotool not running` | `sudo systemctl enable --now ydotoold` and add your user to the `input` group |
+| Computer Use `doctor` reports `ydotool not running` | Start the distro-provided daemon unit (`ydotoold` or `ydotool`), or use a user-session `ydotoold` service, then add your user to the `input` group |
 | Computer Use `doctor` reports `ydotool_socket: Permission denied` | The daemon socket is root-only. Adjust the `ydotoold` service so `/tmp/.ydotool_socket` becomes `root:input` with `0660` permissions |
 | `ConnectTimeoutError` for `www.electronjs.org` during `@electron/rebuild` | Re-run `make build-app`; the installer now uses `https://artifacts.electronjs.org/headers/dist` for Electron headers by default |
 | Computer Use AT-SPI tree empty | Run `codex-computer-use-linux setup` to flip GNOME accessibility on, then restart the target app |
@@ -358,15 +522,15 @@ make clean-state
 4. It rebuilds native Node modules (`better-sqlite3`, `node-pty`) for Linux via `@electron/rebuild`
 5. It downloads the matching Linux Electron runtime (cached under `~/.cache/codex-desktop/electron/`)
 6. It writes the Linux launcher into `codex-app/start.sh` (body sourced from `launcher/start.sh.template`)
-7. `scripts/build-{deb,rpm,pacman}.sh` packages `codex-app/` into a native artifact
-8. The installed package provides `codex-update-manager` plus a `systemd --user` service unit
-9. The updater watches for newer upstream DMGs and rebuilds future Linux packages locally
+7. `scripts/build-{deb,rpm,pacman}.sh` packages `codex-app/` into a native artifact; `scripts/build-appimage.sh` creates a local AppImage
+8. Default native packages provide `codex-update-manager` plus a `systemd --user` service unit
+9. The updater watches for newer upstream DMGs and rebuilds future native Linux packages locally, unless the package was built with `PACKAGE_WITH_UPDATER=0`
 
 The installer replaces the macOS Electron binary with a Linux build, recompiles native modules, and removes macOS-only pieces such as `sparkle`.
 
 The launcher serves extracted webview assets from `content/webview/` on `127.0.0.1` (`5175` by default, `5176` for the dev app), validates the origin, then starts Electron. Warm-start launches hand off actions such as `--new-chat` over a Unix-domain socket instead of spawning a second app process.
 
-Native-package-only launcher behavior, such as desktop-entry hints and update-manager startup, lives in `packaging/linux/codex-packaged-runtime.sh`.
+Native-package-only launcher behavior, such as desktop-entry hints and default update-manager startup, lives in `packaging/linux/codex-packaged-runtime.sh`.
 
 The current evaluation for a future Rust replacement of the local webview server lives in `docs/webview-server-evaluation.md`.
 
@@ -375,7 +539,7 @@ The current evaluation for a future Rust replacement of the local webview server
 After changing installer, packaging, or updater logic:
 
 ```bash
-bash -n install.sh scripts/lib/*.sh launcher/start.sh.template scripts/build-deb.sh scripts/build-rpm.sh scripts/build-pacman.sh scripts/install-deps.sh
+bash -n install.sh scripts/lib/*.sh launcher/start.sh.template scripts/build-deb.sh scripts/build-rpm.sh scripts/build-pacman.sh scripts/build-appimage.sh scripts/install-deps.sh
 node --check scripts/patch-linux-window-ui.js
 for file in scripts/patches/*.js; do node --check "$file"; done
 node --check scripts/ci/validate-patch-report.js
@@ -402,7 +566,7 @@ pacman -Qlp dist/codex-desktop-*.pkg.tar.zst | sed -n '1,40p'
 
 ## Versioning
 
-`codex-update-manager` current crate version: `0.7.1`
+`codex-update-manager` current crate version: `0.8.1`
 
 SemVer policy:
 

@@ -467,12 +467,26 @@ dependencies = [
  "tokio",
  "wayland-client",
  "wayland-protocols",
+ "xkeysym",
  "zbus",
 ]
 
 [[package]]
+name = "codex-read-aloud-linux"
+version = "0.1.0-linux-alpha1"
+dependencies = [
+ "anyhow",
+ "libc",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "codex-update-manager"
-version = "0.7.1"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -482,6 +496,7 @@ dependencies = [
  "futures-util",
  "notify-rust",
  "reqwest",
+ "semver",
  "serde",
  "serde_json",
  "sha2",
@@ -3417,6 +3432,12 @@ name = "writeable"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9edde0db4769d2dc68579893f2306b26c6ecfbe0ef499b013d731b7b9247e0b9"
+
+[[package]]
+name = "xkeysym"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
 
 [[package]]
 name = "yoke"

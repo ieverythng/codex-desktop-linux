@@ -28,21 +28,27 @@ map_arch() {
 	esac
 }
 
-# Arch pkgver must not contain '+' or '-'; split on '+' and use the base as pkgver.
+# Arch pkgver may contain '+', so keep the caller-provided commitish suffix in
+# pkgver. pkgrel is reserved for distro/package rebuilds of the same upstream
+# app version.
 pacman_version_parts() {
-	PACMAN_PKGVER="${PACKAGE_VERSION%%+*}"
+	PACMAN_PKGVER="$PACKAGE_VERSION"
 	PACMAN_PKGREL="1"
 }
 
 main() {
 	ensure_app_layout
 	ensure_file_exists "$PKGBUILD_TEMPLATE" "PKGBUILD template"
-	ensure_file_exists "$INSTALL_HOOKS" "install hooks"
 	ensure_file_exists "$DESKTOP_TEMPLATE" "desktop template"
-	ensure_file_exists "$UPDATER_SERVICE_SOURCE" "updater service template"
-	ensure_file_exists "$USER_SERVICE_HELPER_TEMPLATE" "updater user service helper"
 	ensure_file_exists "$ICON_SOURCE" "icon"
-	ensure_file_exists "$PACKAGED_RUNTIME_SOURCE" "packaged launcher runtime helper"
+	if package_with_updater_enabled; then
+		ensure_file_exists "$INSTALL_HOOKS" "install hooks"
+		ensure_file_exists "$UPDATER_SERVICE_SOURCE" "updater service template"
+		ensure_file_exists "$USER_SERVICE_HELPER_TEMPLATE" "updater user service helper"
+		ensure_file_exists "$PACKAGED_RUNTIME_SOURCE" "packaged launcher runtime helper"
+	else
+		info "Building package without codex-update-manager (PACKAGE_WITH_UPDATER=0)"
+	fi
 	command -v makepkg >/dev/null 2>&1 || error "makepkg is required (part of pacman)"
 
 	if [ "$(id -u)" -eq 0 ]; then
@@ -63,18 +69,37 @@ main() {
 	local staging_root="$build_root/staging"
 
 	stage_common_package_files "$staging_root"
-	stage_update_builder_bundle "$staging_root"
+	stage_optional_update_builder_bundle "$staging_root"
 	write_launcher_stub "$staging_root"
 
+	local package_name
+	local pacman_pkgver
+	local pacman_pkgrel
+	local staging_dir
+	local arch_replacement
+	package_name="$(sed_escape_replacement "$PACKAGE_NAME")"
+	pacman_pkgver="$(sed_escape_replacement "$PACMAN_PKGVER")"
+	pacman_pkgrel="$(sed_escape_replacement "$PACMAN_PKGREL")"
+	staging_dir="$(sed_escape_replacement "$staging_root")"
+	arch_replacement="$(sed_escape_replacement "$arch")"
+
 	sed \
-		-e "s/__PACKAGE_NAME__/$PACKAGE_NAME/g" \
-		-e "s/__PKGVER__/$PACMAN_PKGVER/g" \
-		-e "s/__PKGREL__/$PACMAN_PKGREL/g" \
-		-e "s|__STAGING_DIR__|$staging_root|g" \
-		-e "s/__ARCH__/$arch/g" \
+		-e "s/__PACKAGE_NAME__/$package_name/g" \
+		-e "s/__PKGVER__/$pacman_pkgver/g" \
+		-e "s/__PKGREL__/$pacman_pkgrel/g" \
+		-e "s|__STAGING_DIR__|$staging_dir|g" \
+		-e "s/__ARCH__/$arch_replacement/g" \
 		"$PKGBUILD_TEMPLATE" >"$build_root/PKGBUILD"
-	sed -e "s|/opt/codex-desktop|/opt/$PACKAGE_NAME|g" \
-		"$INSTALL_HOOKS" >"$build_root/${PACKAGE_NAME}.install"
+	if package_with_updater_enabled; then
+		sed -e "s|/opt/codex-desktop|/opt/$PACKAGE_NAME|g" \
+			-e "s|codex_desktop_repair_system_package_shadow_entries codex-desktop|codex_desktop_repair_system_package_shadow_entries $PACKAGE_NAME|g" \
+			"$INSTALL_HOOKS" >"$build_root/${PACKAGE_NAME}.install"
+	else
+		write_no_updater_pacman_install_hooks "$build_root/${PACKAGE_NAME}.install"
+		sed -i \
+			-e "/'polkit'/d" \
+			"$build_root/PKGBUILD"
+	fi
 
 	mkdir -p "$DIST_DIR"
 	info "Building ${PACKAGE_NAME}-${PACMAN_PKGVER}-${PACMAN_PKGREL}-${arch}.pkg.tar.zst"
@@ -90,7 +115,10 @@ main() {
 		-print -quit 2>/dev/null || true)"
 	[ -f "$pkg_file" ] || error "makepkg did not produce a package"
 
+	ln -sfn "$(basename "$pkg_file")" "$DIST_DIR/${PACKAGE_NAME}-latest.pkg.tar.zst"
+
 	info "Built package: $pkg_file"
+	printf '%s\n' "$pkg_file"
 }
 
 main "$@"
