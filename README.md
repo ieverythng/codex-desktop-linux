@@ -166,6 +166,31 @@ Feature-specific Nix outputs are additive. To enable both the Computer Use UI an
 nix run github:ilysenko/codex-desktop-linux#computer-use-ui-remote-mobile-control
 ```
 
+For a declarative NixOS/Home Manager install with the mobile remote-control
+app-server managed by systemd instead of the Desktop launcher, import the flake
+module:
+
+```nix
+{
+  imports = [
+    inputs.codex-desktop-linux.homeManagerModules.default
+  ];
+
+  programs.codexDesktopLinux = {
+    enable = true;
+    computerUseUi.enable = true;
+    remoteMobileControl.enable = true;
+    remoteControl.enable = true;
+  };
+}
+```
+
+This installs the selected Codex Desktop package variant and starts a user
+`codex-remote-control.service` with
+`codex app-server --remote-control --listen unix://`. A
+`nixosModules.default` export is also available for system-level configurations
+that prefer a global user unit.
+
 `nix develop github:ilysenko/codex-desktop-linux` enters a dev shell with the required tooling.
 
 ### Cachix binary cache
@@ -187,7 +212,7 @@ Linux Computer Use is an **opt-in** plugin that lets Codex inspect and control d
 - app listing and accessibility trees via AT-SPI
 - screenshots through GNOME Shell DBus or XDG Desktop Portal
 - window listing and focusing on GNOME, KWin/Plasma, Hyprland, and i3
-- keyboard, text, click, scroll, and drag input through `ydotool`
+- keyboard, text, click, scroll, and drag input through a uinput absolute pointer, the XDG Desktop Portal RemoteDesktop session, or `ydotool`
 
 ### Runtime dependencies
 

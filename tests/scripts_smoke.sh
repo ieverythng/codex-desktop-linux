@@ -109,7 +109,7 @@ JSON
 {"name":"browser","version":"0.1.0-alpha2","interface":{"category":"Engineering"}}
 JSON
     cat > "$resources_dir/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs" <<'JS'
-class Uf{async fetchBlocked(e){let r=await bS(e.endpoint,{method:"GET"});if(!r.ok)throw new Error(ae(`Browser Use cannot determine if ${e.displayUrl} is allowed. Please try again later or use another source.`));let n=await r.json();return TF(n)}}export function setupAtlasRuntime() {}
+function lu(e){let t=globalThis.nodeRepl?.env[e];return typeof t=="string"?t:void 0}class Uf{async fetchBlocked(e){let r=await bS(e.endpoint,{method:"GET"});if(!r.ok)throw new Error(ae(`Browser Use cannot determine if ${e.displayUrl} is allowed. Please try again later or use another source.`));let n=await r.json();return TF(n)}}export function setupAtlasRuntime() {}
 JS
 }
 
@@ -1086,7 +1086,9 @@ test_setup_native_wizard_prints_deep_readiness_guidance() {
     XDG_DATA_HOME="$fake_home/.local/share" \
     XDG_CURRENT_DESKTOP=KDE \
     DESKTOP_SESSION=plasma \
+    XDG_SESSION_DESKTOP=plasma \
     XDG_SESSION_TYPE=wayland \
+    CODEX_LINUX_SETTINGS_FILE="$fake_home/.config/codex-desktop/settings.json" \
     CODEX_BOOTSTRAP_NONINTERACTIVE=1 \
     CODEX_LINUX_FEATURES_ROOT="$features_root" \
     CODEX_LINUX_FEATURES_CONFIG="$config" \
@@ -1154,6 +1156,7 @@ test_setup_native_wizard_read_aloud_paths_match_runtime_defaults() {
     XDG_DATA_HOME="$fake_home/.local/share" \
     CODEX_LINUX_APP_ID="codex-cua-lab" \
     CODEX_APP_ID="codex-desktop" \
+    CODEX_LINUX_SETTINGS_FILE="$fake_home/.config/codex-cua-lab/settings.json" \
     CODEX_BOOTSTRAP_NONINTERACTIVE=1 \
     CODEX_LINUX_FEATURES_ROOT="$features_root" \
     CODEX_LINUX_FEATURES_CONFIG="$config" \
@@ -1178,6 +1181,7 @@ test_setup_native_wizard_sway_hint_is_conservative() {
 
     XDG_CURRENT_DESKTOP=sway \
     DESKTOP_SESSION=sway \
+    XDG_SESSION_DESKTOP=sway \
     CODEX_BOOTSTRAP_NONINTERACTIVE=1 \
     CODEX_LINUX_FEATURES_ROOT="$features_root" \
     CODEX_LINUX_FEATURES_CONFIG="$config" \
@@ -1448,7 +1452,7 @@ SCRIPT
     chmod +x "$start_script"
 
     set +e
-    CODEX_WEBVIEW_PORT="$huge_port" "$start_script" --help >"$launcher_stdout" 2>"$launcher_stderr"
+    CODEX_WEBVIEW_PORT="$huge_port" bash "$start_script" --help >"$launcher_stdout" 2>"$launcher_stderr"
     rc=$?
     set -e
     [ "$rc" -ne 0 ] || fail "Expected launcher validation to reject oversized CODEX_WEBVIEW_PORT"
@@ -1469,7 +1473,7 @@ SCRIPT
 printf '%s\n' "$CODEX_LINUX_WEBVIEW_PORT"
 SCRIPT
     chmod +x "$launcher_probe_script"
-    CODEX_WEBVIEW_PORT=00080 "$launcher_probe_script" >"$launcher_stdout" 2>"$launcher_stderr"
+    CODEX_WEBVIEW_PORT=00080 bash "$launcher_probe_script" >"$launcher_stdout" 2>"$launcher_stderr"
     [ "$(tail -n 1 "$launcher_stdout")" = "80" ] || fail "Expected launcher validation to canonicalize leading-zero CODEX_WEBVIEW_PORT"
     [ ! -s "$launcher_stderr" ] || fail "Expected launcher leading-zero canonicalization to be quiet, got: $(cat "$launcher_stderr")"
 }
@@ -1791,6 +1795,23 @@ test_launcher_template_sanity() {
     assert_contains "$REPO_DIR/launcher/start.sh.template" 'launcher-$CODEX_LINUX_INSTANCE_ID.log'
     assert_contains "$REPO_DIR/launcher/start.sh.template" "ADOPTED_WEBVIEW_PID"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "Reusing webview server pid="
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "run_cold_start_hooks"
+    assert_contains "$REPO_DIR/linux-features/remote-mobile-control/feature.json" '"stageHook": "./stage.sh"'
+    assert_contains "$REPO_DIR/linux-features/remote-mobile-control/stage.sh" "cold-start.d"
+    assert_contains "$REPO_DIR/linux-features/remote-mobile-control/stage.sh" "remote-mobile-control"
+    assert_contains "$REPO_DIR/linux-features/remote-mobile-control/stage.sh" "cold-start-hook.sh"
+    assert_contains "$REPO_DIR/linux-features/remote-mobile-control/cold-start-hook.sh" "remote-control start"
+    assert_contains "$REPO_DIR/linux-features/remote-mobile-control/cold-start-hook.sh" "/run/current-system/sw/bin"
+    assert_contains "$REPO_DIR/linux-features/remote-mobile-control/cold-start-hook.sh" "codex-remote-control.service"
+    assert_contains "$REPO_DIR/linux-features/remote-mobile-control/cold-start-hook.sh" "continuing best-effort in the background"
+    assert_contains "$REPO_DIR/flake.nix" "homeManagerModules"
+    assert_contains "$REPO_DIR/flake.nix" "nixosModules"
+    assert_contains "$REPO_DIR/nix/home-manager-module.nix" "codex-remote-control"
+    assert_contains "$REPO_DIR/nix/home-manager-module.nix" "--remote-control"
+    assert_contains "$REPO_DIR/nix/home-manager-module.nix" "CODEX_REMOTE_CONTROL_DAEMON_AUTOSTART_DISABLED"
+    assert_contains "$REPO_DIR/nix/nixos-module.nix" "codex-remote-control"
+    assert_contains "$REPO_DIR/nix/nixos-module.nix" "--remote-control"
+    assert_contains "$REPO_DIR/nix/nixos-module.nix" "CODEX_REMOTE_CONTROL_DAEMON_AUTOSTART_DISABLED"
     python3 - "$REPO_DIR/launcher/start.sh.template" <<'PY'
 import re
 import sys
@@ -1799,6 +1820,8 @@ source = open(sys.argv[1], encoding="utf-8").read()
 detect_body = source.split("detect_warm_start() {", 1)[1].split("send_warm_start_launch_action() {", 1)[0]
 launch_body = source.split("launch_electron() {", 1)[1].split("load_packaged_runtime_helper", 1)[0]
 runtime_body = source.split("trap cleanup_launcher EXIT", 1)[1].split("launch_electron", 1)[0]
+webview_probe_body = source.split("webview_port_is_open() {", 1)[1].split("wait_for_webview_server() {", 1)[0]
+cold_start_hooks_body = source.split("run_cold_start_hooks() {", 1)[1].split("run_cli_preflight() {", 1)[0]
 stop_body = source.split("stop_owned_webview_server() {", 1)[1].split("owned_webview_server_pid() {", 1)[0]
 stale_body = source.split("pid_is_stale_webview_server() {", 1)[1].split("stop_owned_webview_server() {", 1)[0]
 multi_body = source.split("configure_multi_launch_instance() {", 1)[1].split('WEBVIEW_ORIGIN="http://127.0.0.1:$CODEX_LINUX_WEBVIEW_PORT"', 1)[0]
@@ -1813,6 +1836,10 @@ if 'unset CODEX_LINUX_MULTI_LAUNCH' not in source.split('parse_launcher_args() {
     raise SystemExit("launcher must clear inherited internal multi-launch markers before parsing args")
 if '$((CODEX_LINUX_WEBVIEW_PORT + 4))' not in source:
     raise SystemExit("multi-launch default range must cap the default at five ports")
+if '( trap - EXIT\n      exec 3<>/dev/tcp/127.0.0.1/"$CODEX_LINUX_WEBVIEW_PORT" )' not in webview_probe_body:
+    raise SystemExit("webview port probe must not inherit the launcher EXIT cleanup trap")
+if '( trap - EXIT\n      sleep 0.2' not in webview_probe_body:
+    raise SystemExit("webview port probe watchdog must not inherit the launcher EXIT cleanup trap")
 if 'CODEX_LINUX_INSTANCE_ID="port-$CODEX_LINUX_WEBVIEW_PORT"' not in multi_body:
     raise SystemExit("multi-launch must derive a stable instance id from the allocated port")
 if 'CODEX_LINUX_MULTI_LAUNCH=1' not in multi_body:
@@ -1837,18 +1864,31 @@ if not re.search(r'if ! linux_setting_enabled "codex-linux-warm-start-enabled" 1
     raise SystemExit("detect_warm_start must not fail when warm start is disabled")
 if "preserving liveness marker for second-instance handoff" not in detect_body:
     raise SystemExit("detect_warm_start must preserve the live app liveness marker")
+if launch_body.count("unset ELECTRON_RUN_AS_NODE") != 2:
+    raise SystemExit("launch_electron must clear ELECTRON_RUN_AS_NODE before both Electron launch paths")
 if 'pid_matches_executable "$RUNNING_APP_PID" "$SCRIPT_DIR/electron"' not in launch_body:
     raise SystemExit("launch_electron must not overwrite APP_PID_FILE for second-instance handoff")
 if 'echo "$ELECTRON_PID" > "$APP_PID_FILE"' not in launch_body:
     raise SystemExit("launch_electron must still write APP_PID_FILE for normal cold launches")
+electron_launch = '"$SCRIPT_DIR/electron" "${ELECTRON_LAUNCH_ARGS[@]}" "${ELECTRON_ARGS[@]}"'
+warm_log = 'echo "Electron warm-start handoff:'
+normal_log = 'echo "Electron launch mode:'
+warm_log_pos = launch_body.index(warm_log)
+warm_unset_pos = launch_body.index("unset ELECTRON_RUN_AS_NODE", warm_log_pos)
+warm_launch_pos = launch_body.index(electron_launch, warm_unset_pos)
+normal_log_pos = launch_body.index(normal_log)
+normal_unset_pos = launch_body.index("unset ELECTRON_RUN_AS_NODE", normal_log_pos)
+normal_launch_pos = launch_body.index(electron_launch + " &", normal_unset_pos)
+if not (warm_log_pos < warm_unset_pos < warm_launch_pos < normal_log_pos < normal_unset_pos < normal_launch_pos):
+    raise SystemExit("launch_electron must clear ELECTRON_RUN_AS_NODE immediately before each Electron launch")
 if "using_second_instance_handoff" not in source or "needs_cold_start" not in source:
     raise SystemExit("launcher must have an explicit second-instance handoff mode")
 if "second_instance_handoff_ready" not in runtime_body:
     raise SystemExit("second-instance handoff must skip cold-start setup")
 if "clear_bundled_marketplace_tmp_cache\nmonitor_bundled_marketplace_tmp_permissions\nreconcile_runtime_state" in runtime_body:
     raise SystemExit("warm-start path must not clear bundled marketplace temp cache")
-if not re.search(r'if needs_cold_start; then\s+clear_bundled_marketplace_tmp_cache\s+# The runtime marketplace is populated asynchronously.*?monitor_bundled_marketplace_tmp_permissions\s+sync_browser_use_bundled_plugin_cache\s+sync_chrome_bundled_plugin_cache\s+sync_computer_use_bundled_plugin_cache\s+sync_read_aloud_bundled_plugin_cache\s+fi', runtime_body, re.S):
-    raise SystemExit("bundled marketplace cleanup and plugin sync must run only on cold start")
+if not re.search(r'if needs_cold_start; then\s+clear_bundled_marketplace_tmp_cache\s+# The runtime marketplace is populated asynchronously.*?monitor_bundled_marketplace_tmp_permissions\s+sync_browser_use_bundled_plugin_cache\s+sync_chrome_bundled_plugin_cache\s+sync_computer_use_bundled_plugin_cache\s+sync_read_aloud_bundled_plugin_cache\s+run_cold_start_hooks\s+fi', runtime_body, re.S):
+    raise SystemExit("bundled marketplace cleanup, plugin sync, and cold-start hooks must run only on cold start")
 if 'if needs_cold_start && [ -z "${CODEX_CLI_PATH:-}" ]; then' not in runtime_body:
     raise SystemExit("second-instance handoff must skip CLI lookup")
 if 'if needs_cold_start && [ -z "$CODEX_CLI_PATH" ]; then' not in runtime_body:
@@ -1857,6 +1897,14 @@ if '"$HOME/.bun/bin/codex"' not in source:
     raise SystemExit("CLI lookup must include bun global install path")
 if "if needs_cold_start;" not in runtime_body:
     raise SystemExit("second-instance handoff must skip CLI preflight")
+if 'run_cold_start_hooks' not in runtime_body:
+    raise SystemExit("cold start must run feature-staged hooks before Electron launches")
+if 'COLD_START_HOOK_DIR' not in cold_start_hooks_body or '"$hook" "$SCRIPT_DIR" "$APP_STATE_DIR" "$LOG_DIR"' not in cold_start_hooks_body:
+    raise SystemExit("launcher cold-start hook runner must be generic and pass standard paths")
+if '>>"$LOG_FILE" 2>&1 &' not in cold_start_hooks_body:
+    raise SystemExit("launcher cold-start hooks must be non-blocking")
+if 'remote_mobile_control_main' in source:
+    raise SystemExit("remote mobile daemon startup must live in the remote-mobile-control feature hook, not the main launcher")
 if "running_app_is_active" not in stop_body or "Preserving webview server" not in stop_body:
     raise SystemExit("stop_owned_webview_server must not stop the live app webview server")
 if "stale_webview_server_pid" not in source or "stop_stale_webview_server" not in source:
@@ -2019,6 +2067,7 @@ PY
     assert_contains "$REPO_DIR/scripts/lib/process-detection.sh" "Codex Desktop is currently running from"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "prompt_install_missing_cli"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "prompt-install-cli"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" '.npm-global/bin/codex'
     assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_UPDATE_MANAGER_PATH"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "resolve_update_manager_path"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "run_update_manager"
@@ -2093,6 +2142,44 @@ PY
     assert_contains "$REPO_DIR/contrib/user-local-install/install-user-local.sh" "--force-x11"
     assert_contains "$REPO_DIR/contrib/user-local-install/install-user-local.sh" "user-local.env"
     assert_contains "$REPO_DIR/contrib/user-local-install/README.md" "--force-x11"
+
+    node - "$REPO_DIR/launcher/start.sh.template" <<'NODE' || fail "Bundled backend plugin cache syncs must expose marketplace plugin links"
+const fs = require("node:fs");
+const launcher = fs.readFileSync(process.argv[2], "utf8");
+
+function functionBody(name, nextName) {
+  const pattern = new RegExp(`${name}\\(\\) \\{([\\s\\S]*?)\\n\\}\\n\\n${nextName}\\(\\) \\{`, "u");
+  const match = launcher.match(pattern);
+  if (match == null) {
+    throw new Error(`missing ${name}`);
+  }
+  return match[1];
+}
+
+function assertCacheLinks({ body, plugin }) {
+  for (const required of [
+    `marketplace_plugin_link="$marketplace_root/plugins/${plugin}"`,
+    'ln -sfn "$version" "$cache_root/latest"',
+    'ln -sfn "$cache_root/latest" "$marketplace_plugin_link"',
+  ]) {
+    if (!body.includes(required)) {
+      throw new Error(`${plugin} sync missing ${required}`);
+    }
+  }
+  if (!body.includes("needs_copy=0")) {
+    throw new Error(`${plugin} sync must refresh links on cache hits`);
+  }
+}
+
+assertCacheLinks({
+  body: functionBody("sync_computer_use_bundled_plugin_cache", "sync_read_aloud_bundled_plugin_cache"),
+  plugin: "computer-use",
+});
+assertCacheLinks({
+  body: functionBody("sync_read_aloud_bundled_plugin_cache", "resolve_browser_use_runtime_env"),
+  plugin: "read-aloud",
+});
+NODE
 }
 
 test_side_by_side_launcher_identity() {
@@ -2197,6 +2284,8 @@ test_browser_use_node_repl_fallback_runtime() {
     assert_file_exists "$install_dir/resources/node_repl"
     assert_file_exists "$install_dir/resources/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs"
     cmp -s "$true_bin" "$install_dir/resources/node_repl" || fail "Expected fallback node_repl to come from the runtime archive"
+    assert_contains "$install_dir/resources/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env?.\[e\]'
+    assert_not_contains "$install_dir/resources/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env\[e\]'
     assert_contains "$install_dir/resources/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs" "codexLinuxSiteStatusAllowlistFallback"
     assert_contains "$output_log" "Browser Use node_repl runtime is not a Linux executable for x86_64; skipping"
     assert_not_contains "$output_log" "WARN.*Browser Use node_repl runtime is not a Linux executable"
@@ -2234,6 +2323,8 @@ test_browser_plugin_renamed_upstream_staging() {
 
     assert_file_exists "$browser_dir/scripts/browser-client.mjs"
     assert_contains "$browser_dir/.codex-plugin/plugin.json" '"name":"browser"'
+    assert_contains "$browser_dir/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env?.\[e\]'
+    assert_not_contains "$browser_dir/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env\[e\]'
     assert_contains "$browser_dir/scripts/browser-client.mjs" "codexLinuxSiteStatusAllowlistFallback"
     assert_contains "$marketplace" '"name": "browser"'
     assert_contains "$marketplace" '"path": "./plugins/browser"'
@@ -2295,6 +2386,7 @@ JS
 JSON
     cat > "$chrome_dir/scripts/browser-client.mjs" <<'JS'
 import{resolve as GF}from"path";import{homedir as VF,platform as WF}from"os";var Tc=GF(VF(),WF()==="win32"?"AppData\\Local\\Google\\Chrome\\User Data":"Library/Application Support/Google/Chrome");import{ClassicLevel as KF}from"./node_modules/classic-level.mjs";import{resolve as Gf}from"path";import{tmpdir as YF}from"os";import{cp as ZF,mkdtemp as JF,rm as kS}from"fs/promises";import{existsSync as XF}from"fs";var IS=async(t,e)=>{let r=Gf(Tc,t,"Local Extension Settings",e);if(!XF(r))return null;let n=await JF(Gf(QF(),"codex"));await ZF(r,n,{recursive:!0}),await kS(Gf(n,"LOCK"));let o=new KF(n,{createIfMissing:!1,keyEncoding:"utf8",valueEncoding:"utf8"});try{await o.open();let i=await o.get("extensionInstanceId");if(!i)return null;let s=JSON.parse(i);return typeof s!="string"?null:s}finally{await o.close(),await kS(n,{force:!0,recursive:!0})}},QF=()=>"nodeRepl"in globalThis&&globalThis.nodeRepl?globalThis.nodeRepl.tmpDir:YF();var AS=async t=>{if(t.type!=="extension"||!t.metadata?.extensionInstanceId||!t.metadata.extensionId)return t;let e=await rO(t.metadata.extensionId,t.metadata.extensionInstanceId);return e?{...t,metadata:{...t.metadata,profileName:e.name,profileIsLastUsed:e.isLastUsed.toString(),profileOrdering:e.orderingIndex.toString()}}:t},rO=async(t,e)=>(await nO(t)).find(o=>o.instanceId===e)||null,nO=async t=>{let e=await oO();return await Promise.all(e.map(async r=>({...r,instanceId:await IS(r.id,t).catch(n=>(ee(n),null))})))},oO=async()=>{let t=tO(Tc,"Local State"),e=JSON.parse(await eO(t,"utf8"));return e.profile.profiles_order.map((r,n)=>{let o=e.profile.info_cache[r];return o?{id:r,name:o.name,isLastUsed:e.profile.last_used===r,orderingIndex:n,avatarUrl:o.avatar_icon}:null}).filter(r=>!!r)};
+function lu(e){let t=globalThis.nodeRepl?.env[e];return typeof t=="string"?t:void 0}
 async fetchBlocked(e){let r=await bS(e.endpoint,{method:"GET"});if(!r.ok)throw new Error(ae(`Browser Use cannot determine if ${e.displayUrl} is allowed. Please try again later or use another source.`));let n=await r.json();return TF(n)}
 JS
     cat > "$chrome_dir/scripts/check-native-host-manifest.js" <<'JS'
@@ -2413,6 +2505,8 @@ test_chrome_plugin_staging() {
     assert_contains "$chrome_dir/scripts/browser-client.mjs" '"BraveSoftware","Brave-Browser"'
     assert_contains "$chrome_dir/scripts/browser-client.mjs" '".config","chromium"'
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "instanceId:await IS(o.id,t,r)"
+    assert_contains "$chrome_dir/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env?.\[e\]'
+    assert_not_contains "$chrome_dir/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env\[e\]'
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxSiteStatusAllowlistFallback"
     assert_contains "$install_dir/resources/plugins/openai-bundled/.agents/plugins/marketplace.json" '"name": "chrome"'
     assert_contains "$output_log" "Chrome plugin staged from upstream DMG"
@@ -2479,6 +2573,12 @@ JSON
         # shellcheck disable=SC1091
         source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
         stage_linux_computer_use_plugin() { return 1; }
+        build_chrome_extension_host() {
+            local fake_host="$workspace/codex-chrome-extension-host"
+            printf '#!/bin/sh\n' > "$fake_host"
+            chmod +x "$fake_host"
+            printf '%s\n' "$fake_host"
+        }
         install_bundled_plugin_resources "$app_dir"
     ) >"$output_log" 2>&1
 
