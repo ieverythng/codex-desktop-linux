@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- Launcher rendering mode `CODEX_LINUX_RENDERING_MODE=wayland-gpu`, which
+  forces native Wayland with GPU compositing enabled and skips forced renderer
+  accessibility by default for Wayland desktops where XWayland or software
+  rendering is unstable.
 - New opt-in Linux feature `read-aloud-mcp` that stages a standalone Rust Read
   Aloud MCP plugin with `doctor`, `read_aloud`, and `stop` tools. The MCP server
   reuses the Kokoro runner/model configuration from the Read Aloud UI feature
@@ -18,6 +22,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Bundled Browser plugin staging now preserves local `file://` target support
+  advertised by the Browser plugin while keeping remote file hosts and `data:`
+  URLs blocked by the URL policy.
 - `codex-update-manager` now prunes unreferenced updater workspaces under `~/.cache/codex-update-manager/workspaces`, removing heavy build artifacts (`builder/`, `codex-app/`, `dist/`) while preserving lightweight diagnostics such as `logs/` and rebuild reports.
 - The Chrome native-messaging host now evicts stale browser clients when a newer Codex browser client connects, preventing old Node REPL sessions from repeatedly reattaching CDP and driving extension service-worker CPU.
 - The bundled Chrome plugin is now auto-installed during app startup, matching Browser Use, so the plugin page no longer falls back to an install button after restart when the Linux native host is already staged.

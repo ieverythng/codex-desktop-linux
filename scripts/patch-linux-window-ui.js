@@ -27,6 +27,10 @@ const {
   patchLinuxMultiInstanceBootstrap,
 } = require("./patches/bootstrap.js");
 const {
+  applyAutomationScheduleMultiTimePatch,
+  patchAutomationScheduleAssets,
+} = require("./patches/automation-schedule.js");
+const {
   applyLinuxChromePluginAutoInstallPatch,
 } = require("./patches/chrome-plugin.js");
 const {
@@ -54,6 +58,7 @@ const {
 } = require("./patches/launch-actions.js");
 const {
   applyBrowserUseNodeReplApprovalPatch,
+  applyLinuxBuildInfoTrayPatch,
   applyLinuxChromeExtensionStatusPatch,
   applyLinuxExplicitIpcQuitPatch,
   applyLinuxExplicitQuitPromptBypassPatch,
@@ -143,6 +148,7 @@ function applyLinuxBrowserUseIabVisibleOnCreatePatch(currentSource) {
 module.exports = {
   COMPUTER_USE_UI_ENV_VAR,
   COMPUTER_USE_UI_SETTINGS_KEY,
+  applyAutomationScheduleMultiTimePatch,
   applyBrowserAnnotationScreenshotPatch,
   applyBrowserUseNodeReplApprovalPatch,
   applyKeybindsSettingsIndexPatch,
@@ -153,6 +159,7 @@ module.exports = {
   applyLinuxAppUpdaterMenuPatch,
   applyLinuxAvatarOverlayMousePassthroughPatch,
   applyLinuxBrowserUseIabVisibleOnCreatePatch,
+  applyLinuxBuildInfoTrayPatch,
   applyLinuxChromeExtensionStatusPatch,
   applyLinuxChromePluginAutoInstallPatch,
   applyLinuxComputerUseFeaturePatch,
@@ -198,6 +205,7 @@ module.exports = {
   normalizePatchDescriptors,
   parseOsRelease,
   patchCommentPreloadBundle,
+  patchAutomationScheduleAssets,
   patchExtractedApp,
   patchKeybindsSettingsAssets,
   patchLinuxMultiInstanceBootstrap,

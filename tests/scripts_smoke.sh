@@ -31,6 +31,20 @@ assert_file_not_exists() {
     [ ! -e "$path" ] || fail "Expected file not to exist: $path"
 }
 
+assert_mode() {
+    local path="$1"
+    local expected="$2"
+    local actual
+    actual="$(python3 - "$path" <<'PY'
+import os
+import sys
+
+print(format(os.lstat(sys.argv[1]).st_mode & 0o777, "o"))
+PY
+)"
+    [ "$actual" = "$expected" ] || fail "Expected mode $expected for $path, got $actual"
+}
+
 assert_contains() {
     local path="$1"
     local pattern="$2"
@@ -109,7 +123,7 @@ JSON
 {"name":"browser","version":"0.1.0-alpha2","interface":{"category":"Engineering"}}
 JSON
     cat > "$resources_dir/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs" <<'JS'
-function lu(e){let t=globalThis.nodeRepl?.env[e];return typeof t=="string"?t:void 0}class Uf{async fetchBlocked(e){let r=await bS(e.endpoint,{method:"GET"});if(!r.ok)throw new Error(ae(`Browser Use cannot determine if ${e.displayUrl} is allowed. Please try again later or use another source.`));let n=await r.json();return TF(n)}}export function setupAtlasRuntime() {}
+function lu(e){let t=globalThis.nodeRepl?.env[e];return typeof t=="string"?t:void 0}function th(){let e=import.meta.__codexNativePipe;return e==null||typeof e.createConnection!="function"?null:e}var I2=new Set(["about:blank"]);function Gb(e){if(I2.has(e))return!0;let t;try{t=new URL(e)}catch{return!1}return t.protocol==="http:"||t.protocol==="https:"}class Uf{async fetchBlocked(e){let r=await bS(e.endpoint,{method:"GET"});if(!r.ok)throw new Error(ae(`Browser Use cannot determine if ${e.displayUrl} is allowed. Please try again later or use another source.`));let n=await r.json();return TF(n)}}export function setupAtlasRuntime() {}
 JS
 }
 
@@ -131,6 +145,30 @@ test_common_helper_sourcing() {
     # shellcheck disable=SC1091
     source "$REPO_DIR/scripts/lib/package-common.sh"
     ensure_file_exists "$probe_file" "probe file"
+}
+
+test_package_payload_permission_normalization() {
+    info "Checking package payload permission normalization"
+    local root="$TMP_DIR/package-permissions"
+    local app_root="$root/opt/codex-desktop"
+
+    mkdir -p "$app_root/content/webview" "$root/usr/bin"
+    printf '%s\n' '#!/bin/bash' 'echo start' > "$app_root/start.sh"
+    printf '%s\n' '<!doctype html>' > "$app_root/content/webview/index.html"
+    printf '%s\n' '#!/bin/bash' 'exec /opt/codex-desktop/start.sh "$@"' > "$root/usr/bin/codex-desktop"
+    chmod 0700 "$root/opt" "$app_root" "$app_root/content" "$app_root/content/webview"
+    chmod 0700 "$app_root/start.sh" "$root/usr/bin/codex-desktop"
+    chmod 0600 "$app_root/content/webview/index.html"
+
+    # shellcheck disable=SC1091
+    source "$REPO_DIR/scripts/lib/package-common.sh"
+    normalize_package_payload_permissions "$root"
+
+    assert_mode "$app_root" "755"
+    assert_mode "$app_root/content/webview" "755"
+    assert_mode "$app_root/start.sh" "755"
+    assert_mode "$root/usr/bin/codex-desktop" "755"
+    assert_mode "$app_root/content/webview/index.html" "644"
 }
 
 test_deb_builder_smoke() {
@@ -189,6 +227,8 @@ SCRIPT
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/linux-update-bridge-patch.js"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/patch-report.js"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/rebuild-report.sh"
+    assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/build-info.js"
+    assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/build-info.sh"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/linux-features.js"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/linux-features.sh"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/linux-target-context.js"
@@ -210,6 +250,7 @@ SCRIPT
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/updater/Cargo.toml"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/plugins/openai-bundled/plugins/computer-use/.mcp.json"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/plugins/openai-bundled/plugins/read-aloud/.mcp.json"
+    assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/.codex-linux/source-info.json"
     assert_file_exists "$pkg_root/opt/codex-desktop/.codex-linux/codex-packaged-runtime.sh"
     assert_file_exists "$pkg_root/opt/codex-desktop/.codex-linux/codex-desktop-entry-doctor.sh"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/packaging/linux/codex-desktop-entry-doctor.sh"
@@ -223,6 +264,7 @@ test_update_builder_preserves_enabled_linux_features_config() {
     local app_dir="$workspace/app"
     local feature_config="$workspace/features.json"
     local staged_config="$root/opt/codex-desktop/update-builder/linux-features/features.json"
+    local source_info="$root/opt/codex-desktop/update-builder/.codex-linux/source-info.json"
 
     mkdir -p "$workspace"
     make_fake_app "$app_dir"
@@ -240,6 +282,8 @@ JSON
         export PACKAGE_NAME="codex-desktop"
         export UPDATER_SERVICE_SOURCE="$REPO_DIR/packaging/linux/codex-update-manager.service"
         export CODEX_LINUX_FEATURES_CONFIG="$feature_config"
+        export CODEX_LINUX_SOURCE_REMOTE="https://builder:secret-token@example.com/org/repo.git"
+        export SOURCE_DATE_EPOCH="1710000000"
 
         # shellcheck disable=SC1091
         source "$REPO_DIR/scripts/lib/package-common.sh"
@@ -256,6 +300,18 @@ const configPath = process.argv[2];
 const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 if (JSON.stringify(config) !== JSON.stringify({ enabled: ["example-feature"] })) {
   process.exit(1);
+}
+NODE
+
+    node - "$source_info" <<'NODE' || fail "Expected staged source info to be sanitized and reproducible"
+const fs = require("node:fs");
+const sourceInfoPath = process.argv[2];
+const info = JSON.parse(fs.readFileSync(sourceInfoPath, "utf8"));
+if (info.remote !== "https://example.com/org/repo.git") {
+  throw new Error(`unexpected remote: ${info.remote}`);
+}
+if (info.capturedAt !== new Date(1710000000 * 1000).toISOString()) {
+  throw new Error(`unexpected capturedAt: ${info.capturedAt}`);
 }
 NODE
 }
@@ -452,6 +508,9 @@ test_rpm_builder_smoke() {
     mkdir -p "$workspace" "$dist_dir" "$capture_dir"
     make_stub_bin_dir "$bin_dir"
     make_fake_app "$app_dir"
+    chmod 0700 "$app_dir" "$app_dir/content" "$app_dir/content/webview"
+    chmod 0700 "$app_dir/start.sh"
+    chmod 0600 "$app_dir/content/webview/index.html"
     printf '#!/usr/bin/env bash\nexit 0\n' > "$updater_bin"
     chmod +x "$updater_bin"
 
@@ -514,7 +573,16 @@ SCRIPT
     assert_file_not_exists "$capture_dir/staging/usr/lib/systemd/user/codex-update-manager.service"
     assert_file_not_exists "$capture_dir/staging/usr/share/polkit-1/actions/com.github.ilysenko.codex-desktop-linux.update.policy"
     assert_file_not_exists "$capture_dir/staging/opt/codex-desktop/update-builder"
+    assert_mode "$capture_dir/staging/opt/codex-desktop" "755"
+    assert_mode "$capture_dir/staging/opt/codex-desktop/content/webview" "755"
+    assert_mode "$capture_dir/staging/opt/codex-desktop/start.sh" "755"
+    assert_mode "$capture_dir/staging/opt/codex-desktop/content/webview/index.html" "644"
     assert_contains "$capture_dir/codex-desktop.spec" "%if 0"
+    assert_contains "$capture_dir/codex-desktop.spec" "codex_elf_suffix ()(64bit)"
+    assert_contains "$capture_dir/codex-desktop.spec" "libatk-bridge-2.0.so.0"
+    assert_contains "$capture_dir/codex-desktop.spec" "libgbm.so.1"
+    assert_not_contains "$capture_dir/codex-desktop.spec" "at-spi2-atk"
+    assert_not_contains "$capture_dir/codex-desktop.spec" "mesa-libgbm"
     assert_contains "$capture_dir/codex-desktop.spec" "codex_no_updater_cleanup_update_manager_service"
     assert_contains "$capture_dir/staging/opt/codex-desktop/.codex-linux/codex-no-updater-transition-cleanup.sh" "codex_no_updater_cleanup_user_enablement_links"
 }
@@ -811,6 +879,25 @@ test_native_shortcut_targets_compose_existing_flows() {
 
     make -n -C "$REPO_DIR" setup-native >"$setup_log"
     assert_contains "$setup_log" 'bash scripts/bootstrap-wizard.sh'
+}
+
+test_fedora_dependency_bootstrap_installs_rpmbuild() {
+    info "Checking Fedora dependency bootstrap includes rpmbuild"
+    local install_deps="$REPO_DIR/scripts/install-deps.sh"
+    local helper="$REPO_DIR/scripts/lib/install-helpers.sh"
+    local readme="$REPO_DIR/README.md"
+
+    awk '/^install_dnf5\(\) \{/,/^}/' "$install_deps" | grep -q -- "rpm-build" \
+        || fail "install_dnf5 must install rpm-build for rpmbuild"
+    awk '/^install_dnf\(\) \{/,/^}/' "$install_deps" | grep -q -- "rpm-build" \
+        || fail "install_dnf must install rpm-build for rpmbuild"
+
+    assert_contains "$install_deps" "sudo dnf install python3 7zip curl unzip rpm-build @development-tools"
+    assert_contains "$install_deps" "sudo dnf install nodejs npm python3 p7zip p7zip-plugins curl unzip rpm-build"
+    assert_contains "$helper" "sudo dnf install python3 7zip curl unzip rpm-build @development-tools"
+    assert_contains "$helper" "sudo dnf install nodejs npm python3 p7zip p7zip-plugins curl unzip rpm-build"
+    assert_contains "$readme" "sudo dnf install python3 7zip curl unzip rpm-build @development-tools"
+    assert_contains "$readme" "sudo dnf install python3 p7zip p7zip-plugins curl unzip rpm-build"
 }
 
 test_setup_native_wizard_noninteractive_feature_writer() {
@@ -1565,6 +1652,96 @@ CPP
     assert_contains "$output_log" "already applied"
 }
 
+test_v8_nullptr_workaround_skips_when_included_probe_succeeds() {
+    info "Checking V8 nullptr_t workaround probe stays inactive when not needed"
+    local workspace="$TMP_DIR/v8-nullptr-workaround-skip"
+    local fake_bin="$workspace/bin"
+    local cxx_log="$workspace/cxx.log"
+    local cxx_state="$workspace/cxx-state.log"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$fake_bin" "$workspace/work"
+    cat > "$fake_bin/c++" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'argv:%s\n' "$*" >> "$NATIVE_CXX_LOG"
+for arg in "$@"; do
+    if [ -f "$arg" ]; then
+        cat "$arg" >> "$NATIVE_CXX_LOG"
+    fi
+done
+exit 0
+SCRIPT
+    chmod +x "$fake_bin/c++"
+
+    (
+        CXX="$fake_bin/c++"
+        NATIVE_CXX_LOG="$cxx_log"
+        export CXX NATIVE_CXX_LOG
+        info() { echo "[INFO] $*" >&2; }
+        warn() { echo "[WARN] $*" >&2; }
+        error() { echo "[ERROR] $*" >&2; exit 1; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/native-modules.sh"
+        apply_v8_nullptr_t_workaround_if_needed "$workspace/work"
+        printf 'CXX=%s\n' "$CXX" > "$cxx_state"
+    ) > "$output_log" 2>&1
+
+    assert_contains "$cxx_log" "#include <cstddef>"
+    assert_contains "$cxx_log" "nullptr_t x = nullptr;"
+    assert_contains "$cxx_state" "CXX=$fake_bin/c++"
+    assert_not_contains "$output_log" "Applied GCC 16+ nullptr_t compatibility workaround"
+}
+
+test_v8_nullptr_workaround_wraps_when_included_probe_fails() {
+    info "Checking V8 nullptr_t workaround wraps CXX only when needed"
+    local workspace="$TMP_DIR/v8-nullptr-workaround-wrap"
+    local fake_bin="$workspace/bin"
+    local cxx_log="$workspace/cxx.log"
+    local cxx_state="$workspace/cxx-state.log"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$fake_bin" "$workspace/work"
+    cat > "$fake_bin/c++" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'argv:%s\n' "$*" >> "$NATIVE_CXX_LOG"
+for arg in "$@"; do
+    if [ -f "$arg" ]; then
+        cat "$arg" >> "$NATIVE_CXX_LOG"
+    fi
+    case "$arg" in
+        *.v8-nullptr-probe.cc) exit 1 ;;
+    esac
+done
+exit 0
+SCRIPT
+    chmod +x "$fake_bin/c++"
+    printf '%s\n' 'int main() { return 0; }' > "$workspace/dummy.cc"
+
+    (
+        CXX="$fake_bin/c++"
+        NATIVE_CXX_LOG="$cxx_log"
+        export CXX NATIVE_CXX_LOG
+        info() { echo "[INFO] $*" >&2; }
+        warn() { echo "[WARN] $*" >&2; }
+        error() { echo "[ERROR] $*" >&2; exit 1; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/native-modules.sh"
+        apply_v8_nullptr_t_workaround_if_needed "$workspace/work"
+        "$CXX" -x c++ -fsyntax-only "$workspace/dummy.cc"
+        printf 'CXX=%s\n' "$CXX" > "$cxx_state"
+    ) > "$output_log" 2>&1
+
+    assert_file_exists "$workspace/work/.v8-nullptr-fix.h"
+    assert_file_exists "$workspace/work/.cxx-v8-nullptr"
+    assert_contains "$workspace/work/.v8-nullptr-fix.h" "using std::nullptr_t;"
+    assert_contains "$cxx_state" "CXX=$workspace/work/.cxx-v8-nullptr"
+    assert_contains "$cxx_log" "-include"
+    assert_contains "$cxx_log" ".v8-nullptr-fix.h"
+    assert_contains "$output_log" "Applied GCC 16+ nullptr_t compatibility workaround"
+}
+
 test_native_module_rebuild_uses_local_electron_rebuild_toolchain() {
     info "Checking native module rebuild uses local Electron rebuild toolchain"
     local workspace="$TMP_DIR/native-module-rebuild-toolchain"
@@ -2001,6 +2178,27 @@ PY
     [[ "$output" == *"electron=<--ozone-platform=x11>"* ]] || fail "pass-through ozone platform must reach Electron: $output"
     [[ "$output" != *"<--ozone-platform-hint=auto>"* ]] || fail "launcher must not add ozone hint when pass-through supplies an ozone platform: $output"
 
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wayland-gpu "$launcher_probe" probe)"
+    [[ "$output" == *"mode=wayland-gpu"* && "$output" == *"ozone_platform=wayland"* && "$output" == *"gpu=1"* ]] || fail "wayland-gpu profile must force native Wayland with GPU enabled: $output"
+    [[ "$output" == *"comp=0"* && "$output" != *"<--disable-gpu-compositing>"* ]] || fail "wayland-gpu profile must keep GPU compositing enabled: $output"
+    [[ "$output" == *"<--ozone-platform=wayland>"* && "$output" == *"<--enable-features=WaylandWindowDecorations>"* ]] || fail "wayland-gpu profile must add Wayland launch args: $output"
+    [[ "$output" == *"renderer_accessibility=0"* && "$output" != *"<--force-renderer-accessibility>"* ]] || fail "wayland-gpu profile must skip renderer accessibility by default: $output"
+
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wayland-gpu CODEX_FORCE_RENDERER_ACCESSIBILITY=1 "$launcher_probe" probe)"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "CODEX_FORCE_RENDERER_ACCESSIBILITY=1 must force renderer accessibility under wayland-gpu: $output"
+
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wayland-gpu "$launcher_probe" probe --x11)"
+    [[ "$output" == *"mode=wayland-gpu"* && "$output" == *"ozone_platform=x11"* ]] || fail "explicit --x11 must override the wayland-gpu platform: $output"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "wayland-gpu with explicit --x11 must keep X11 renderer accessibility default: $output"
+
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wayland-gpu "$launcher_probe" probe --safe-mode)"
+    [[ "$output" == *"mode=wayland-gpu"* && "$output" == *"ozone_platform=x11"* && "$output" == *"gpu=0"* ]] || fail "safe-mode must override wayland-gpu to X11 software rendering: $output"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "wayland-gpu with safe-mode must keep X11 renderer accessibility default: $output"
+
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wayland-gpu "$launcher_probe" probe -- --ozone-platform=x11)"
+    [[ "$output" == *"electron=<--ozone-platform=x11>"* && "$output" != *"<--ozone-platform-hint=auto>"* ]] || fail "pass-through X11 platform must override wayland-gpu hinting: $output"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "wayland-gpu with pass-through X11 platform must keep X11 renderer accessibility default: $output"
+
     output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wslg "$launcher_probe" probe)"
     [[ "$output" == *"mode=wslg"* && "$output" == *"comp=0"* && "$output" == *"gl_added=1"* ]] || fail "forced WSLg profile must keep GPU compositing enabled and add ANGLE: $output"
     [[ "$output" == *"<--ozone-platform=x11>"* && "$output" == *"electron=<--use-gl=angle>"* ]] || fail "forced WSLg profile must use X11 and ANGLE by default: $output"
@@ -2055,6 +2253,7 @@ PY
     assert_contains "$REPO_DIR/launcher/start.sh.template" '--app-id="$CODEX_LINUX_APP_ID"'
     assert_contains "$REPO_DIR/scripts/lib/process-detection.sh" "CODEX_APP_ID"
     assert_contains "$REPO_DIR/launcher/start.sh.template" 'ELECTRON_OZONE_HINT="auto"'
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_LINUX_RENDERING_MODE=auto|default|wslg|wayland-gpu"
     assert_contains "$REPO_DIR/launcher/start.sh.template" '--ozone-platform-hint="$ELECTRON_OZONE_HINT"'
     assert_contains "$REPO_DIR/launcher/start.sh.template" "--disable-gpu-sandbox"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "--force-renderer-accessibility"
@@ -2287,9 +2486,80 @@ test_browser_use_node_repl_fallback_runtime() {
     assert_contains "$install_dir/resources/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env?.\[e\]'
     assert_not_contains "$install_dir/resources/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env\[e\]'
     assert_contains "$install_dir/resources/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs" "codexLinuxSiteStatusAllowlistFallback"
+    assert_contains "$install_dir/resources/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs" "codexLinuxFileUrlPolicy"
     assert_contains "$output_log" "Browser Use node_repl runtime is not a Linux executable for x86_64; skipping"
     assert_not_contains "$output_log" "WARN.*Browser Use node_repl runtime is not a Linux executable"
     assert_contains "$output_log" "Downloading Browser Use node_repl fallback runtime"
+}
+
+test_browser_use_file_url_policy_patch_behavior() {
+    info "Checking Browser Use file URL policy patch behavior"
+    local workspace="$TMP_DIR/browser-file-url-policy"
+    local client="$workspace/browser-client.mjs"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$workspace"
+    cat > "$client" <<'JS'
+var I2=new Set(["about:blank"]);function Gb(e){if(I2.has(e))return!0;let t;try{t=new URL(e)}catch{return!1}return t.protocol==="http:"||t.protocol==="https:"}
+JS
+
+    (
+        warn() { echo "[WARN] $*" >&2; }
+        info() { echo "[INFO] $*" >&2; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        patch_browser_use_file_url_policy "$client"
+    ) >"$output_log" 2>&1
+
+    assert_contains "$client" "codexLinuxFileUrlPolicy"
+    assert_contains "$client" 'protocol==="file:"'
+    assert_not_contains "$client" 'protocol==="data:"'
+    assert_not_contains "$output_log" "Could not find Browser Use URL policy insertion point"
+
+    node - "$client" <<'NODE'
+const fs = require("fs");
+const vm = require("vm");
+
+const client = process.argv[2];
+const source = fs.readFileSync(client, "utf8");
+const context = { URL };
+vm.createContext(context);
+vm.runInContext(
+  `${source}
+this.results = {
+  aboutBlank: Gb("about:blank"),
+  http: Gb("http://example.com/"),
+  https: Gb("https://example.com/"),
+  localFile: Gb("file:///tmp/codex-browser-file-policy.html"),
+  localhostFile: Gb("file://localhost/tmp/codex-browser-file-policy.html"),
+  remoteFile: Gb("file://example.com/tmp/codex-browser-file-policy.html"),
+  data: Gb("data:text/html,hello"),
+  javascript: Gb("javascript:alert(1)"),
+  ftp: Gb("ftp://example.com/"),
+  invalid: Gb("not a url"),
+};`,
+  context,
+);
+
+const expected = {
+  aboutBlank: true,
+  http: true,
+  https: true,
+  localFile: true,
+  localhostFile: true,
+  remoteFile: false,
+  data: false,
+  javascript: false,
+  ftp: false,
+  invalid: false,
+};
+
+for (const [key, value] of Object.entries(expected)) {
+  if (context.results[key] !== value) {
+    throw new Error(`${key}: expected ${value}, got ${context.results[key]}`);
+  }
+}
+NODE
 }
 
 test_browser_plugin_renamed_upstream_staging() {
@@ -2325,7 +2595,12 @@ test_browser_plugin_renamed_upstream_staging() {
     assert_contains "$browser_dir/.codex-plugin/plugin.json" '"name":"browser"'
     assert_contains "$browser_dir/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env?.\[e\]'
     assert_not_contains "$browser_dir/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env\[e\]'
+    assert_contains "$browser_dir/scripts/browser-client.mjs" "nativePipe??import.meta.__codexNativePipe"
+    assert_not_contains "$browser_dir/scripts/browser-client.mjs" "let e=import.meta.__codexNativePipe;return"
     assert_contains "$browser_dir/scripts/browser-client.mjs" "codexLinuxSiteStatusAllowlistFallback"
+    assert_contains "$browser_dir/scripts/browser-client.mjs" "codexLinuxFileUrlPolicy"
+    assert_contains "$browser_dir/scripts/browser-client.mjs" 'protocol==="file:"'
+    assert_not_contains "$browser_dir/scripts/browser-client.mjs" 'protocol==="data:"'
     assert_contains "$marketplace" '"name": "browser"'
     assert_contains "$marketplace" '"path": "./plugins/browser"'
     assert_contains "$output_log" "Browser plugin staged from upstream DMG"
@@ -2387,6 +2662,7 @@ JSON
     cat > "$chrome_dir/scripts/browser-client.mjs" <<'JS'
 import{resolve as GF}from"path";import{homedir as VF,platform as WF}from"os";var Tc=GF(VF(),WF()==="win32"?"AppData\\Local\\Google\\Chrome\\User Data":"Library/Application Support/Google/Chrome");import{ClassicLevel as KF}from"./node_modules/classic-level.mjs";import{resolve as Gf}from"path";import{tmpdir as YF}from"os";import{cp as ZF,mkdtemp as JF,rm as kS}from"fs/promises";import{existsSync as XF}from"fs";var IS=async(t,e)=>{let r=Gf(Tc,t,"Local Extension Settings",e);if(!XF(r))return null;let n=await JF(Gf(QF(),"codex"));await ZF(r,n,{recursive:!0}),await kS(Gf(n,"LOCK"));let o=new KF(n,{createIfMissing:!1,keyEncoding:"utf8",valueEncoding:"utf8"});try{await o.open();let i=await o.get("extensionInstanceId");if(!i)return null;let s=JSON.parse(i);return typeof s!="string"?null:s}finally{await o.close(),await kS(n,{force:!0,recursive:!0})}},QF=()=>"nodeRepl"in globalThis&&globalThis.nodeRepl?globalThis.nodeRepl.tmpDir:YF();var AS=async t=>{if(t.type!=="extension"||!t.metadata?.extensionInstanceId||!t.metadata.extensionId)return t;let e=await rO(t.metadata.extensionId,t.metadata.extensionInstanceId);return e?{...t,metadata:{...t.metadata,profileName:e.name,profileIsLastUsed:e.isLastUsed.toString(),profileOrdering:e.orderingIndex.toString()}}:t},rO=async(t,e)=>(await nO(t)).find(o=>o.instanceId===e)||null,nO=async t=>{let e=await oO();return await Promise.all(e.map(async r=>({...r,instanceId:await IS(r.id,t).catch(n=>(ee(n),null))})))},oO=async()=>{let t=tO(Tc,"Local State"),e=JSON.parse(await eO(t,"utf8"));return e.profile.profiles_order.map((r,n)=>{let o=e.profile.info_cache[r];return o?{id:r,name:o.name,isLastUsed:e.profile.last_used===r,orderingIndex:n,avatarUrl:o.avatar_icon}:null}).filter(r=>!!r)};
 function lu(e){let t=globalThis.nodeRepl?.env[e];return typeof t=="string"?t:void 0}
+import{platform as yT}from"node:os";function eh(){return"privileged native pipe bridge is not available; browser-client is not trusted"}function th(){let e=globalThis.nodeRepl?.nativePipe;return e==null||typeof e.createConnection!="function"?null:e}var ml=class e{constructor(t){this.socket=t}static async create(t){let r=th();if(r!=null){let n=await r.createConnection(t);return new e(n)}throw new Error(eh())}};
 async fetchBlocked(e){let r=await bS(e.endpoint,{method:"GET"});if(!r.ok)throw new Error(ae(`Browser Use cannot determine if ${e.displayUrl} is allowed. Please try again later or use another source.`));let n=await r.json();return TF(n)}
 JS
     cat > "$chrome_dir/scripts/check-native-host-manifest.js" <<'JS'
@@ -2507,6 +2783,9 @@ test_chrome_plugin_staging() {
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "instanceId:await IS(o.id,t,r)"
     assert_contains "$chrome_dir/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env?.\[e\]'
     assert_not_contains "$chrome_dir/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env\[e\]'
+    assert_contains "$chrome_dir/scripts/browser-client.mjs" "nativePipe??import.meta.__codexNativePipe"
+    assert_not_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxNativePipeFallback"
+    assert_not_contains "$chrome_dir/scripts/browser-client.mjs" 'await import("node:net")'
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxSiteStatusAllowlistFallback"
     assert_contains "$install_dir/resources/plugins/openai-bundled/.agents/plugins/marketplace.json" '"name": "chrome"'
     assert_contains "$output_log" "Chrome plugin staged from upstream DMG"
@@ -2596,28 +2875,30 @@ test_chrome_native_host_manifest_writer() {
     local workspace="$TMP_DIR/chrome-native-host-manifest"
     local plugin_dir="$workspace/plugin"
     local home_dir="$workspace/home"
+    local app_dir="$workspace/app"
     local host_path="$workspace/extension-host"
     local manifest_path
 
-    mkdir -p "$plugin_dir/scripts" "$home_dir" "$(dirname "$host_path")"
+    mkdir -p "$plugin_dir/scripts" "$home_dir" "$app_dir/.codex-linux" "$(dirname "$host_path")"
     printf '#!/bin/sh\n' > "$host_path"
     chmod +x "$host_path"
     cat > "$plugin_dir/scripts/extension-id.json" <<'JSON'
 {"extensionId":"abcdefghijklmnopabcdefghijklmnop","extensionHostName":"com.example.codextest"}
 JSON
+    printf '%s\n' ".config/example-browser/NativeMessagingHosts" > "$app_dir/.codex-linux/chrome-native-host-manifest-paths"
 
-    python3 - "$REPO_DIR/launcher/start.sh.template" "$host_path" "$home_dir" "$plugin_dir" <<'PY'
+    python3 - "$REPO_DIR/launcher/start.sh.template" "$host_path" "$home_dir" "$plugin_dir" "$app_dir" <<'PY'
 import subprocess
 import sys
 from pathlib import Path
 
 source = Path(sys.argv[1]).read_text(encoding="utf-8")
-marker = "python3 - \"$host_path\" \"$HOME\" \"$plugin_dir\" <<'PY'\n"
+marker = "python3 - \"$host_path\" \"$HOME\" \"$plugin_dir\" \"$SCRIPT_DIR\" <<'PY'\n"
 start = source.index(marker) + len(marker)
 end = source.index("\nPY\n", start)
 script = source[start:end]
 subprocess.run(
-    ["python3", "-", sys.argv[2], sys.argv[3], sys.argv[4]],
+    ["python3", "-", sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]],
     input=script,
     text=True,
     check=True,
@@ -2627,7 +2908,8 @@ PY
     for relative in \
         ".config/google-chrome/NativeMessagingHosts" \
         ".config/BraveSoftware/Brave-Browser/NativeMessagingHosts" \
-        ".config/chromium/NativeMessagingHosts"; do
+        ".config/chromium/NativeMessagingHosts" \
+        ".config/example-browser/NativeMessagingHosts"; do
         manifest_path="$home_dir/$relative/com.example.codextest.json"
         assert_file_exists "$manifest_path"
         assert_contains "$manifest_path" "com.example.codextest"
@@ -4470,6 +4752,7 @@ EOF
 
 main() {
     test_common_helper_sourcing
+    test_package_payload_permission_normalization
     test_deb_builder_smoke
     test_update_builder_preserves_enabled_linux_features_config
     test_deb_builder_respects_package_identity
@@ -4483,6 +4766,7 @@ main() {
     test_make_build_app_uses_installer_download_flow_by_default
     test_make_build_app_fresh_uses_installer_fresh_flow
     test_native_shortcut_targets_compose_existing_flows
+    test_fedora_dependency_bootstrap_installs_rpmbuild
     test_setup_native_wizard_noninteractive_feature_writer
     test_setup_native_wizard_rejects_invalid_feature_ids
     test_setup_native_wizard_rejects_conflicting_feature_ids
@@ -4506,10 +4790,13 @@ main() {
     test_port_validation_rejects_oversized_numeric_values
     test_managed_node_runtime_source_install
     test_better_sqlite3_electron_42_source_patch
+    test_v8_nullptr_workaround_skips_when_included_probe_succeeds
+    test_v8_nullptr_workaround_wraps_when_included_probe_fails
     test_native_module_rebuild_uses_local_electron_rebuild_toolchain
     test_native_module_rebuild_accepts_prebuilt_source
     test_bundled_plugin_builders_accept_prebuilt_binaries
     test_browser_use_node_repl_fallback_runtime
+    test_browser_use_file_url_policy_patch_behavior
     test_browser_plugin_renamed_upstream_staging
     test_browser_use_node_repl_glibc_pidfd_patch_static
     test_browser_use_node_repl_ldd_output_compatibility

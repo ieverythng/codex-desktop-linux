@@ -20,7 +20,7 @@ Optional Linux-only additions live in `linux-features/`. Use them for integratio
 | Atomic desktops / other Linux distros | none | `.AppImage` | Local self-build only; no bundled auto-updater |
 | NixOS / Nix | flake | runnable directly | `nix run github:ilysenko/codex-desktop-linux` |
 
-Anything systemd-based should work for the optional auto-updater service (`systemd --user`). The launcher targets Wayland with `XWayland` first (better Electron popup positioning); pure Wayland sessions fall through to `--ozone-platform-hint=auto`. X11 is fully supported.
+Anything systemd-based should work for the optional auto-updater service (`systemd --user`). The launcher targets Wayland with `XWayland` first (better Electron popup positioning); pure Wayland sessions fall through to `--ozone-platform-hint=auto`. X11 is fully supported. If XWayland or software rendering is unstable on a Wayland desktop, `CODEX_LINUX_RENDERING_MODE=wayland-gpu` forces native Wayland while keeping GPU compositing enabled.
 
 ## What you get
 
@@ -248,7 +248,7 @@ If you are on Fedora + KDE Plasma and the system unit path is awkward, a user-se
 - old system-level overrides are removed if they force the wrong socket path
 - `codex-computer-use-linux doctor` reports `can_send_development_input: true`
 
-A working XDG Desktop Portal implementation is needed if you are not on GNOME — `xdg-desktop-portal-kde` for KDE Plasma, `xdg-desktop-portal-wlr` for sway / Hyprland, or your distro's preferred portal backend for i3. GNOME ships a working portal by default.
+A working XDG Desktop Portal implementation is needed if you are not on GNOME — `xdg-desktop-portal-kde` for KDE Plasma, `xdg-desktop-portal-wlr` for sway, `xdg-desktop-portal-hyprland` for Hyprland, or your distro's preferred portal backend for i3. GNOME ships a working portal by default.
 
 ### Verifying readiness
 
@@ -412,10 +412,10 @@ Ubuntu-family `p7zip-full` can be too old for newer APFS DMGs, so `install-deps.
 
 ```bash
 # Fedora 41+
-sudo dnf install python3 7zip curl unzip @development-tools
+sudo dnf install python3 7zip curl unzip rpm-build @development-tools
 
 # Fedora < 41
-sudo dnf install python3 p7zip p7zip-plugins curl unzip
+sudo dnf install python3 p7zip p7zip-plugins curl unzip rpm-build
 sudo dnf groupinstall 'Development Tools'
 
 # openSUSE
@@ -528,7 +528,7 @@ make clean-state
 | `CODEX_CLI_PATH` error | Reopen the app to retry the automatic CLI install flow, or install manually with `npm i -g @openai/codex` / `npm i -g --prefix ~/.local @openai/codex` |
 | `gh auth status` works in a terminal but fails inside Codex Desktop | The app shell may be using isolated XDG paths or missing keyring DBus access. See [GitHub CLI auth in app-launched shells](docs/github-cli-auth.md) |
 | Electron hangs while CLI is outdated | Re-run the launcher and check `~/.cache/codex-desktop/launcher.log` plus `~/.local/state/codex-update-manager/service.log`. Best-effort CLI preflight will warn if the automatic refresh fails |
-| GPU / Vulkan / Wayland errors | Under Wayland with `DISPLAY` available, the launcher uses `--ozone-platform=x11` for window-positioning compatibility. Otherwise it uses `--ozone-platform-hint=auto`. The GPU sandbox is disabled by default, while GPU compositing stays enabled |
+| GPU / Vulkan / Wayland errors | Under Wayland with `DISPLAY` available, the launcher uses `--ozone-platform=x11` for window-positioning compatibility. Otherwise it uses `--ozone-platform-hint=auto`. The GPU sandbox is disabled by default, while GPU compositing stays enabled. On desktops where XWayland or software rendering hangs, such as some COSMIC/NVIDIA sessions, try `CODEX_LINUX_RENDERING_MODE=wayland-gpu ./codex-app/start.sh` |
 | Window flickering | Try `CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=1 ./codex-app/start.sh` to use the legacy compositing workaround. If flickering persists, try `./codex-app/start.sh --disable-gpu` to fully disable GPU acceleration |
 | Sandbox errors | The launcher already sets `--no-sandbox` |
 | Stale install / cached DMG | `make build-app-fresh` removes the existing install dir and cached DMG, then re-downloads |
