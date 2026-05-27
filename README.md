@@ -474,6 +474,16 @@ After `make build-app` or `make build-app-fresh`, build a native package from `c
 
 Override the package version with `PACKAGE_VERSION=YYYY.MM.DD.HHMMSS+commitish ./scripts/build-*.sh`. AppImage builds require `appimagetool` on `PATH`, or `APPIMAGETOOL=/path/to/appimagetool`.
 
+Tune local build parallelism with one Make variable:
+
+```bash
+MAX_BUILD_THREADS=8 make build-app-fresh
+MAX_BUILD_THREADS=8 make package
+MAX_BUILD_THREADS=8 make install-native
+```
+
+`MAX_BUILD_THREADS=0` is the default, which preserves each tool's automatic/default behavior and existing user config such as `MAKEFLAGS`, makepkg config, and RPM macros. Set a nonzero value to opt in to one repo-level requested worker count for supported build steps. When nonzero, `MAX_BUILD_THREADS` is authoritative for the phases it controls and overrides inherited `MAKEFLAGS` for make-backed subprocesses. Supported phases use the value for Cargo `--jobs`, native module rebuild jobs, Debian package compression, pacman package compression, and RPM zstd payload compression (`w19T<threads>.zstdio`). RPM builders can still set `RPM_BINARY_PAYLOAD=w19.zstdio make rpm` for exact payload flags when needed.
+
 The packaging scripts only repackage what's already in `codex-app/`. They do not download or extract the DMG themselves.
 
 Native packages bundle the managed Node.js runtime and do not hard-depend on distro `nodejs` / `npm`. Packages built with the default updater pull in `polkit` (or `policykit-1` on older Debian/Ubuntu) plus `pkexec` for privileged update installs; `PACKAGE_WITH_UPDATER=0` packages do not install those updater-specific artifacts.
