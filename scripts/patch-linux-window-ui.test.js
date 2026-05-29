@@ -39,6 +39,7 @@ const {
   applyLinuxMultiInstanceBootstrapPatch,
   applyLinuxAppSunsetPatch,
   applyLinuxOpaqueBackgroundPatch,
+  applyLinuxFastModeModelGuardPatch,
   applyLinuxOpaqueWindowsDefaultPatch,
   applyLinuxReadyToShowWindowStatePatch,
   applyLinuxSetIconPatch,
@@ -76,6 +77,7 @@ const {
   applyBrowserAnnotationScreenshotPatch,
   applyPersistentRateLimitFooterPatch,
   applyLinuxAppServerFeatureEnablementPatch,
+  applyLinuxConfigWriteVersionConflictPatch,
 } = require("./patches/webview-assets.js");
 const { patchAssetFiles } = require("./patches/shared.js");
 
@@ -510,9 +512,11 @@ test("default core patch descriptors are grouped and unique", () => {
     "automation-schedule-multi-time-rrule",
     "linux-app-sunset-gate",
     "linux-app-server-feature-enablement",
+    "linux-config-write-version-conflict",
     "opaque-window-default-general-settings",
     "opaque-window-default-webview-index",
     "opaque-window-default-resolved-theme",
+    "linux-fast-mode-model-guard",
     "subagent-nickname-metadata-shape",
     "linux-computer-use-ui-availability",
     "linux-computer-use-install-flow",
@@ -543,6 +547,12 @@ function trayBundleFixture() {
     "var pb=class{trayMenuThreads={runningThreads:[],unreadThreads:[],pinnedThreads:[],recentThreads:[],usageLimits:[]};constructor(){this.tray={on(){},setContextMenu(){},popUpContextMenu(){}};this.onTrayButtonClick=()=>{};this.tray.on(`click`,()=>{this.onTrayButtonClick()}),this.tray.on(`right-click`,()=>{this.openNativeTrayMenu()})}async handleMessage(e){switch(e.type){case`tray-menu-threads-changed`:this.trayMenuThreads=e.trayMenuThreads;return}}openNativeTrayMenu(){this.updateChronicleTrayIcon();let e=n.Menu.buildFromTemplate(this.getNativeTrayMenuItems());e.once(`menu-will-show`,()=>{this.isNativeTrayMenuOpen=!0}),e.once(`menu-will-close`,()=>{this.isNativeTrayMenuOpen=!1,this.handleNativeTrayMenuClosed()}),this.tray.popUpContextMenu(e)}updateChronicleTrayIcon(){}getNativeTrayMenuItems(){return[]}}",
     "v&&k.on(`close`,e=>{this.persistPrimaryWindowBounds(k,f);let t=this.getPrimaryWindows(f).some(e=>e!==k);if(process.platform===`win32`&&!this.isAppQuitting&&this.options.canHideLastLocalWindowToTray?.()===!0&&!t){e.preventDefault(),k.hide();return}if(process.platform===`darwin`&&!this.isAppQuitting&&!t){e.preventDefault(),k.hide()}});",
     "let E=process.platform===`win32`;E&&oe();",
+  ].join("");
+}
+
+function currentTrayMenuBundleFixture() {
+  return [
+    "var sW=class{trayMenuThreads={runningThreads:[],unreadThreads:[],pinnedThreads:[],recentThreads:[],usageLimits:[]};constructor(){this.tray={on(){},setContextMenu(){},popUpContextMenu(){}}}getNativeTrayMenuItems(){let{pinnedThreads:e,recentThreads:t,runningThreads:r,unreadThreads:i,usageLimits:a}=this.trayMenuThreads,o=this.nativeIntl.formatMessage({messageId:vc,defaultMessage:yc}),s=this.nativeIntl.formatMessage({messageId:gc,defaultMessage:_c}),c=uW({label:this.nativeIntl.formatMessage({messageId:oc,defaultMessage:sc}),moreLabel:s,threads:r,projectlessLabel:o,onOpenThread:this.onTrayMenuOpenRecentThread}),h=[c].filter(e=>e.length>0).flatMap((e,t)=>t===0?e:[{type:`separator`},...e]);return[...h,...h.length>0?[{type:`separator`}]:[],{label:this.nativeIntl.formatMessage({messageId:nc,defaultMessage:rc}),click:()=>{this.onTrayMenuOpenNewThread()}},{type:`separator`},{label:fW(this.appName),click:()=>{n.app.quit()}}]}};",
   ].join("");
 }
 
@@ -1100,6 +1110,45 @@ test("patches drifted comment preload screenshot anchor helper names", () => {
   assert.doesNotMatch(patched, /\bS\.width\b/);
 });
 
+test("guards fast-mode model tier lookup when serviceTiers is missing", () => {
+  const source =
+    "function m(e){return e.serviceTiers.length>0||e.additionalSpeedTiers?.includes(u)===!0}";
+
+  const patched = applyPatchTwice(applyLinuxFastModeModelGuardPatch, source);
+
+  assert.match(patched, /\(e\?\.serviceTiers\?\.length\?\?0\)>0/);
+  assert.doesNotMatch(patched, /e\.serviceTiers\.length/);
+});
+
+test("guards drifted fast-mode tier lookup shapes", () => {
+  const source = [
+    "function y(t){return t.serviceTiers.length > 0 || t.additionalSpeedTiers?.includes(`fast`)}",
+    "const z=e=>e.serviceTiers.length>0||e.additionalSpeedTiers.includes(\"fast\")===!0;",
+  ].join(";");
+
+  const patched = applyPatchTwice(applyLinuxFastModeModelGuardPatch, source);
+
+  assert.match(patched, /\(t\?\.serviceTiers\?\.length\?\?0\)>0\|\|t\?\.additionalSpeedTiers\?\.includes\(`fast`\)===!0/);
+  assert.match(patched, /\(e\?\.serviceTiers\?\.length\?\?0\)>0\|\|e\?\.additionalSpeedTiers\?\.includes\("fast"\)===!0/);
+  assert.doesNotMatch(patched, /[te]\.serviceTiers\.length/);
+});
+
+test("warns when the fast-mode tier lookup is recognizable but unpatchable", () => {
+  const { value, warnings } = captureWarns(() =>
+    applyLinuxFastModeModelGuardPatch(
+      "function m(e){return currentModel().serviceTiers.length > 0 || e.additionalSpeedTiers?.includes(u)===!0}",
+    ),
+  );
+
+  assert.equal(
+    value,
+    "function m(e){return currentModel().serviceTiers.length > 0 || e.additionalSpeedTiers?.includes(u)===!0}",
+  );
+  assert.deepEqual(warnings, [
+    "WARN: Could not find fast-mode model guard insertion point — skipping fast-mode crash guard patch",
+  ]);
+});
+
 test("warns when a matched webview opaque bundle has no known insertion point", () => {
   const { warnings } = captureWarns(() =>
     applyLinuxOpaqueWindowsDefaultPatch("function runtime(){let C=theme;if(C.opaqueWindows&&!ba()){}}"),
@@ -1302,6 +1351,29 @@ test("adds Linux build information to the tray menu", () => {
   assert.match(patched, /Enabled features:/);
   assert.match(patched, /Upstream DMG SHA256:/);
   assert.match(patched, /Linux source revision:/);
+});
+
+test("adds Linux build information to current tray menu shape", () => {
+  const patched = applyPatchTwice(applyLinuxBuildInfoTrayPatch, `${mainBundlePrefix}${currentTrayMenuBundleFixture()}`);
+
+  assert.match(patched, /function codexLinuxShowBuildInfo\(\)/);
+  assert.match(
+    patched,
+    /getNativeTrayMenuItems\(\)\{let\{pinnedThreads:e,[^]*?;return\[\.\.\.process\.platform===`linux`\?\[\{label:`Build Information`,click:\(\)=>\{codexLinuxShowBuildInfo\(\)\}\},\{type:`separator`\}\]:\[\],\.\.\.h/,
+  );
+});
+
+test("adds Linux build information to the app Help menu", () => {
+  const source =
+    "let n=require(`electron`),o=require(`node:fs`),i=require(`node:path`),e={bn:{help:`help`}};let $e=[{role:`help`,id:e.bn.help,submenu:[{label:`Codex Documentation`,click:()=>{n.shell.openExternal(`https://developers.openai.com/codex/app`)}}]}],et=n.Menu.buildFromTemplate($e);n.Menu.setApplicationMenu(et);";
+  const patched = applyPatchTwice(applyLinuxBuildInfoTrayPatch, source);
+
+  assert.match(patched, /function codexLinuxShowBuildInfo\(\)/);
+  assert.doesNotThrow(() => new Function(patched));
+  assert.match(
+    patched,
+    /\{role:`help`,id:e\.bn\.help,submenu:\[\.\.\.process\.platform===`linux`\?\[\{label:`Build Information`,click:\(\)=>\{codexLinuxShowBuildInfo\(\)\}\},\{type:`separator`\}\]:\[\],\{label:`Codex Documentation`/,
+  );
 });
 
 test("adds Linux tray support for current minified window and startup identifiers", () => {
@@ -1800,6 +1872,28 @@ test("warns when app-server feature sync still has unsupported features but the 
   assert.deepEqual(warnings, [
     "WARN: Could not find app-server feature enablement list — skipping unsupported feature compatibility patch",
   ]);
+});
+
+test("drops stale expectedVersion from Linux webview config writes", () => {
+  const source = [
+    "async function X(e,t,n){await o(`write-config-value`,{hostId:r,keyPath:t,value:n,mergeStrategy:`upsert`,filePath:B.filePath,expectedVersion:B.expectedVersion})}",
+    "async function Y(e){await qn(`batch-write-config-value`,{hostId:h,edits:e,filePath:v?.configWriteTarget?.filePath??null,expectedVersion:v?.configWriteTarget?.expectedVersion??null,reloadUserConfig:!0})}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyLinuxConfigWriteVersionConflictPatch, source);
+
+  assert.match(patched, /write-config-value/);
+  assert.equal((patched.match(/expectedVersion:null/g) || []).length, 2);
+  assert.equal(patched.includes("expectedVersion:B.expectedVersion"), false);
+  assert.equal(patched.includes("expectedVersion:v?.configWriteTarget?.expectedVersion??null"), false);
+});
+
+test("leaves already-null config write versions unchanged", () => {
+  const source = "async function X(){await o(`write-config-value`,{expectedVersion:null})}";
+
+  const patched = applyPatchTwice(applyLinuxConfigWriteVersionConflictPatch, source);
+
+  assert.equal(patched, source);
 });
 
 test("adds Linux package updater behind the existing app updater manager", () => {
@@ -2382,6 +2476,34 @@ test("shows current use-is-plugins-enabled Computer Use UI on Linux", () => {
   );
 });
 
+test("shows object-helper Computer Use plugin UI on Linux", () => {
+  const source =
+    "function m(e){return e===`macOS`||e===`windows`}" +
+    "function h(e){let n=(0,f.c)(15),{enabled:r,hostId:i}=e,a=r===void 0?!0:r,{isLoading:o,platform:s}=u(),c=t(i).kind===`local`,d=l(`1506311413`),h;n[0]===i?h=n[1]:(h={featureName:`computer_use`,hostId:i},n[0]=i,n[1]=h);let _=p(h),v;n[2]!==_.enabled||n[3]!==_.isLoading||n[4]!==a||n[5]!==d||n[6]!==c||n[7]!==o||n[8]!==s?(v=g({enabled:a,isComputerUseFeatureEnabled:_.enabled,isComputerUseFeatureLoading:_.isLoading,isComputerUseGateEnabled:d,isHostCompatiblePlatform:m(s),isHostLocal:c,isPlatformLoading:o,windowType:`electron`}),n[2]=_.enabled,n[3]=_.isLoading,n[4]=a,n[5]=d,n[6]=c,n[7]=o,n[8]=s,n[9]=v):v=n[9];return v}";
+
+  const patched = applyPatchTwice(applyLinuxComputerUseRendererAvailabilityPatch, source);
+
+  assert.match(patched, /function m\(e\)\{return e===`macOS`\|\|e===`windows`\|\|e===`linux`\}/);
+  assert.match(
+    patched,
+    /v=g\(\{enabled:a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:s===`linux`\|\|m\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
+  );
+});
+
+test("keeps object-helper Computer Use host compatibility on Linux when platform predicate drifts", () => {
+  const source =
+    "function m(e){return e===`macOS`||e===`windows`||q(e)}" +
+    "function h(e){let n=(0,f.c)(15),{enabled:r,hostId:i}=e,a=r===void 0?!0:r,{isLoading:o,platform:s}=u(),c=t(i).kind===`local`,d=l(`1506311413`),h;n[0]===i?h=n[1]:(h={featureName:`computer_use`,hostId:i},n[0]=i,n[1]=h);let _=p(h),v;n[2]!==_.enabled||n[3]!==_.isLoading||n[4]!==a||n[5]!==d||n[6]!==c||n[7]!==o||n[8]!==s?(v=g({enabled:a,isComputerUseFeatureEnabled:_.enabled,isComputerUseFeatureLoading:_.isLoading,isComputerUseGateEnabled:d,isHostCompatiblePlatform:m(s),isHostLocal:c,isPlatformLoading:o,windowType:`electron`}),n[2]=_.enabled,n[3]=_.isLoading,n[4]=a,n[5]=d,n[6]=c,n[7]=o,n[8]=s,n[9]=v):v=n[9];return v}";
+
+  const patched = applyPatchTwice(applyLinuxComputerUseRendererAvailabilityPatch, source);
+
+  assert.match(patched, /function m\(e\)\{return e===`macOS`\|\|e===`windows`\|\|q\(e\)\}/);
+  assert.match(
+    patched,
+    /v=g\(\{enabled:a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:s===`linux`\|\|m\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
+  );
+});
+
 test("warns without partially patching when Computer Use renderer availability gate drifts", () => {
   const source =
     "function g(e){return e===`macOS`||e===`windows`}" +
@@ -2904,7 +3026,7 @@ test("patchExtractedApp scans apps bundles for Computer Use availability when UI
       fs.writeFileSync(
         path.join(assetsDir, "use-is-plugins-enabled-current.js"),
         "function p(e){return e===`macOS`||e===`windows`}" +
-          "function m(e){let t=(0,d.c)(8),{enabled:n,hostId:r,isHostLocal:i}=e,a=n===void 0?!0:n,{isLoading:o,platform:s}=l(),u=c(`1506311413`),m;t[0]===r?m=t[1]:(m={featureName:`computer_use`,hostId:r},t[0]=r,t[1]=m);let h=f(m),g;t[2]===s?g=t[3]:(g=p(s),t[2]=s,t[3]=g);let _=a&&i&&u&&(o||g),v=_&&!o&&h.enabled&&!h.isLoading,y=_&&h.isLoading,b=_&&(o||h.isLoading),x;return x}",
+          "function m(e){let n=(0,f.c)(15),{enabled:r,hostId:i}=e,a=r===void 0?!0:r,{isLoading:o,platform:s}=u(),c=t(i).kind===`local`,d=l(`1506311413`),h;n[0]===i?h=n[1]:(h={featureName:`computer_use`,hostId:i},n[0]=i,n[1]=h);let _=p(h),v;n[2]!==_.enabled||n[3]!==_.isLoading||n[4]!==a||n[5]!==d||n[6]!==c||n[7]!==o||n[8]!==s?(v=g({enabled:a,isComputerUseFeatureEnabled:_.enabled,isComputerUseFeatureLoading:_.isLoading,isComputerUseGateEnabled:d,isHostCompatiblePlatform:p(s),isHostLocal:c,isPlatformLoading:o,windowType:`electron`}),n[2]=_.enabled,n[3]=_.isLoading,n[4]=a,n[5]=d,n[6]=c,n[7]=o,n[8]=s,n[9]=v):v=n[9];return v}",
       );
       fs.writeFileSync(path.join(tempRoot, "package.json"), JSON.stringify({ name: "codex" }));
 
@@ -2916,7 +3038,7 @@ test("patchExtractedApp scans apps bundles for Computer Use availability when UI
       );
       assert.match(
         fs.readFileSync(path.join(assetsDir, "use-is-plugins-enabled-current.js"), "utf8"),
-        /let _=a&&i&&\(s===`linux`\|\|u&&\(o\|\|g\)\),v=_&&!o&&\(s===`linux`\|\|h\.enabled\)&&!h\.isLoading/,
+        /v=g\(\{enabled:a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:s===`linux`\|\|p\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
       );
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });

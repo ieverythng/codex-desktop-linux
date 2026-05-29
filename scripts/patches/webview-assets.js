@@ -225,6 +225,32 @@ function applyLinuxAppServerFeatureEnablementPatch(currentSource) {
   ].join("");
 }
 
+function applyLinuxConfigWriteVersionConflictPatch(currentSource) {
+  if (!currentSource.includes("expectedVersion:")) {
+    return currentSource;
+  }
+
+  const patchedSource = currentSource.replace(
+    /expectedVersion:(?:[A-Za-z_$][\w$]*\?\.[^,{}]+|[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)(?:\?\?null)?/g,
+    "expectedVersion:null",
+  );
+
+  if (patchedSource !== currentSource) {
+    return patchedSource;
+  }
+
+  if (
+    currentSource.includes("expectedVersion:") &&
+    !currentSource.includes("expectedVersion:null")
+  ) {
+    console.warn(
+      "WARN: Could not find config write expectedVersion needle — skipping config version-conflict patch",
+    );
+  }
+
+  return currentSource;
+}
+
 function applySubagentNicknameMetadataPatch(currentSource) {
   let patchedSource = currentSource;
   const sourceShapePatchedMarker = "`subAgent`in e?e.subAgent:`subagent`in e?e.subagent:null";
@@ -637,6 +663,27 @@ function applyPersistentRateLimitFooterPatch(currentSource) {
   return patchedSource;
 }
 
+function applyLinuxFastModeModelGuardPatch(currentSource) {
+  const tierLookupNeedle =
+    /([A-Za-z_$][\w$]*)\.serviceTiers\.length\s*>\s*0\s*\|\|\s*\1\.additionalSpeedTiers(?:\?\.|\.)includes\(([^()]*)\)(?:\s*===\s*!0)?/gu;
+  const patchedSource = currentSource.replace(
+    tierLookupNeedle,
+    (match, modelVar, fastTierExpr) =>
+      `(${modelVar}?.serviceTiers?.length??0)>0||${modelVar}?.additionalSpeedTiers?.includes(${fastTierExpr})===!0`,
+  );
+  if (patchedSource !== currentSource) {
+    return patchedSource;
+  }
+
+  if (/serviceTiers\.length\s*>\s*0/u.test(currentSource) && currentSource.includes("additionalSpeedTiers")) {
+    console.warn(
+      "WARN: Could not find fast-mode model guard insertion point — skipping fast-mode crash guard patch",
+    );
+  }
+
+  return currentSource;
+}
+
 function patchCommentPreloadBundle(extractedDir) {
   const commentPreloadBundle = path.join(extractedDir, ".vite", "build", "comment-preload.js");
   if (!fs.existsSync(commentPreloadBundle)) {
@@ -658,9 +705,11 @@ function patchCommentPreloadBundle(extractedDir) {
 module.exports = {
   applyBrowserAnnotationScreenshotPatch,
   applyLinuxAppServerFeatureEnablementPatch,
+  applyLinuxConfigWriteVersionConflictPatch,
   applyPersistentRateLimitFooterPatch,
   applyLinuxAppSunsetPatch,
   applyLinuxOpaqueWindowsDefaultPatch,
+  applyLinuxFastModeModelGuardPatch,
   applySubagentNicknameMetadataPatch,
   patchCommentPreloadBundle,
 };

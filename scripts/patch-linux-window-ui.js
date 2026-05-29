@@ -97,7 +97,9 @@ const {
 const {
   applyBrowserAnnotationScreenshotPatch,
   applyLinuxAppSunsetPatch,
+  applyLinuxConfigWriteVersionConflictPatch,
   applyLinuxOpaqueWindowsDefaultPatch,
+  applyLinuxFastModeModelGuardPatch,
   applySubagentNicknameMetadataPatch,
   patchCommentPreloadBundle,
 } = require("./patches/webview-assets.js");
@@ -162,6 +164,7 @@ module.exports = {
   applyLinuxBuildInfoTrayPatch,
   applyLinuxChromeExtensionStatusPatch,
   applyLinuxChromePluginAutoInstallPatch,
+  applyLinuxConfigWriteVersionConflictPatch,
   applyLinuxComputerUseFeaturePatch,
   applyLinuxComputerUseInstallFlowPatch,
   applyLinuxComputerUsePluginGatePatch,
@@ -178,6 +181,7 @@ module.exports = {
   applyLinuxMultiInstanceBootstrapPatch,
   applyLinuxOpaqueBackgroundPatch,
   applyLinuxOpaqueWindowsDefaultPatch,
+  applyLinuxFastModeModelGuardPatch,
   applyLinuxQuitGuardPatch,
   applyLinuxReadyToShowWindowStatePatch,
   applyLinuxRemoteControlConfigPreservationPatch,
