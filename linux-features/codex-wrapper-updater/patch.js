@@ -50,7 +50,14 @@ function applyMainBundlePatch(source) {
     `function codexLinuxWrapManagerPath(){let e=process.env.CODEX_UPDATE_MANAGER_PATH;return typeof e===\`string\`&&e.trim().length>0?e:\`codex-update-manager\`}`,
     `function codexLinuxWrapSpawnCheck(){try{let c=${childProcessVar}.spawn(codexLinuxWrapManagerPath(),[\`check-wrapper\`],{stdio:\`ignore\`,detached:!0,env:process.env});c.on(\`error\`,()=>{});c.unref()}catch{}}`,
     `function codexLinuxWrapWriteMarker(){let p=codexLinuxWrapMarkerPath();if(!p)return{ok:!1,reason:\`no-marker-path\`};try{${fsVar}.mkdirSync(${pathVar}.dirname(p),{recursive:!0});${fsVar}.writeFileSync(p,new Date().toISOString());return{ok:!0,path:p}}catch(e){return{ok:!1,error:String(e?.message||e)}}}`,
-    `function codexLinuxWrapInstallNow(){let m=codexLinuxWrapWriteMarker();if(!m.ok)return m;try{let a=require(\`electron\`).app;setTimeout(()=>a.exit(0),200);return{ok:!0}}catch(e){return{ok:!1,error:String(e?.message||e)}}}`,
+    // Spawn a detached watcher that survives app exit: wait for this app to
+    // quit, apply the wrapper update, then relaunch via the launcher. The marker
+    // is still written so a manual relaunch also applies the update if the
+    // watcher is killed. Relaunch command comes from CODEX_LINUX_LAUNCHER_CMD
+    // (exported by the launcher); apply-wrapper-update reads CODEX_LINUX_APP_DIR
+    // to pick the correct install-type path.
+    `function codexLinuxWrapApplyAfterQuit(){try{let mgr=codexLinuxWrapManagerPath();let launcher=process.env.CODEX_LINUX_LAUNCHER_CMD||\`\`;let pid=process.pid;let c=${childProcessVar}.spawn(\`/bin/sh\`,[\`-c\`,\`for i in $(seq 1 30);do kill -0 $1 2>/dev/null||break;sleep 1;done;"$2" apply-wrapper-update >/dev/null 2>&1||true;if [ -n "$3" ]&&[ -x "$3" ];then ("$3" >/dev/null 2>&1 &);fi\`,\`codex-linux-wrapper-apply\`,String(pid),mgr,launcher],{detached:!0,stdio:\`ignore\`,env:process.env});c.on(\`error\`,()=>{});c.unref?.()}catch{}}`,
+    `function codexLinuxWrapInstallNow(){let m=codexLinuxWrapWriteMarker();if(!m.ok)return m;codexLinuxWrapApplyAfterQuit();try{let a=require(\`electron\`).app;setTimeout(()=>a.exit(0),200);return{ok:!0}}catch(e){return{ok:!1,error:String(e?.message||e)}}}`,
     `function codexLinuxWrapHandle(e={}){let action=e&&e.action;if(action===\`status\`)return codexLinuxWrapStatusPayload();if(action===\`check\`){codexLinuxWrapSpawnCheck();return{ok:!0}}if(action===\`install\`)return codexLinuxWrapInstallNow();return{ok:!1,reason:\`unknown-action\`}}`,
     // Refresh wrapper state once at module load (primary instance only).
     `(()=>{if(process.env.CODEX_LINUX_MULTI_LAUNCH!==\`1\`)codexLinuxWrapSpawnCheck()})();`,

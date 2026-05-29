@@ -38,6 +38,20 @@ enum InstallType {
 }
 
 fn detect_install_type(config: &RuntimeConfig) -> InstallType {
+    // The launcher knows which install is actually running and exports its app
+    // directory. Prefer that authoritative hint: an app dir under /opt is the
+    // packaged install; anything else (e.g. ~/.local/opt) is user-local. This
+    // disambiguates machines that have both a .deb and a user-local install.
+    if let Some(app_dir) = std::env::var_os("CODEX_LINUX_APP_DIR") {
+        let app_dir = PathBuf::from(app_dir);
+        if app_dir.starts_with("/opt/") {
+            return InstallType::Packaged;
+        }
+        return InstallType::UserLocal;
+    }
+
+    // Fallback when no launcher hint is present: a packaged builder bundle plus
+    // an installed system package indicates the packaged install.
     let packaged_bundle = Path::new("/opt/codex-desktop/update-builder");
     if config.builder_bundle_root == packaged_bundle && install::is_primary_package_installed() {
         InstallType::Packaged
@@ -49,6 +63,21 @@ fn detect_install_type(config: &RuntimeConfig) -> InstallType {
 fn set_wrapper_status(state: &mut PersistedState, paths: &RuntimePaths, status: &str) {
     state.wrapper_status = Some(status.to_string());
     let _ = state.save(&paths.state_file);
+}
+
+/// Removes the launcher handoff marker (`wrapper-update-pending`) so a manual
+/// relaunch does not re-apply an already-installed update. Best-effort.
+fn clear_pending_marker() {
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
+    let state_root = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(home).join(".local/state"));
+    let marker = state_root
+        .join("codex-desktop")
+        .join("wrapper-update-pending");
+    let _ = std::fs::remove_file(marker);
 }
 
 /// Applies a pending wrapper update. No-ops when wrapper tracking is disabled.
@@ -65,7 +94,7 @@ pub async fn run_apply_wrapper_update(
     set_wrapper_status(state, paths, "applying");
 
     let result = match detect_install_type(config) {
-        InstallType::UserLocal => apply_user_local().await,
+        InstallType::UserLocal => apply_user_local(config, paths).await,
         InstallType::Packaged => apply_packaged(config, state, paths).await,
     };
 
@@ -76,6 +105,9 @@ pub async fn run_apply_wrapper_update(
             state.candidate_wrapper_date = None;
             state.wrapper_changelog = None;
             let _ = state.save(&paths.state_file);
+            // Clear the launcher handoff marker so a manual relaunch does not
+            // re-apply an already-installed update.
+            clear_pending_marker();
             let _ = notify::send(
                 "Codex Desktop Linux updated",
                 "The newer Linux wrapper build has been installed.",
@@ -90,19 +122,48 @@ pub async fn run_apply_wrapper_update(
     }
 }
 
-/// User-local apply: reuse the contrib `codex-desktop-update` helper, which
-/// pulls the managed wrapper checkout and re-runs `install.sh` in place.
-async fn apply_user_local() -> Result<()> {
-    let helper = user_local_update_helper().context(
-        "user-local wrapper update helper (~/.local/bin/codex-desktop-update) not found",
-    )?;
-    info!(helper = %helper.display(), "applying wrapper update via user-local helper");
-    let status = Command::new(&helper)
-        .arg("--quiet")
+/// User-local apply. Prefers the contrib `codex-desktop-update` helper (managed
+/// checkout pull + in-place `install.sh`) when present; otherwise falls back to
+/// fetching the wrapper source and running its `install.sh` directly against the
+/// running app dir. Runs as the user, no privilege escalation.
+async fn apply_user_local(config: &RuntimeConfig, paths: &RuntimePaths) -> Result<()> {
+    if let Some(helper) = user_local_update_helper() {
+        info!(helper = %helper.display(), "applying wrapper update via user-local helper");
+        let status = Command::new(&helper)
+            .arg("--quiet")
+            .status()
+            .with_context(|| format!("Failed to run {}", helper.display()))?;
+        if !status.success() {
+            anyhow::bail!("{} exited with status {status}", helper.display());
+        }
+        return Ok(());
+    }
+
+    // Fallback: rebuild in place from a freshly fetched wrapper source.
+    let app_dir = user_local_app_dir()
+        .context("could not resolve user-local app dir (CODEX_LINUX_APP_DIR)")?;
+    let install_root = app_dir
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| app_dir.clone());
+    let wrapper_src = ensure_wrapper_source(config, paths)?;
+    let install_sh = wrapper_src.join("install.sh");
+    if !install_sh.is_file() {
+        anyhow::bail!(
+            "wrapper source is missing install.sh at {}",
+            install_sh.display()
+        );
+    }
+    info!(app_dir = %app_dir.display(), "rebuilding user-local app in place via install.sh");
+    let status = Command::new(&install_sh)
+        .current_dir(&wrapper_src)
+        .env("CODEX_INSTALL_ALLOW_RUNNING", "1")
+        .env("CODEX_INSTALL_ROOT", &install_root)
+        .env("CODEX_INSTALL_DIR", &app_dir)
         .status()
-        .with_context(|| format!("Failed to run {}", helper.display()))?;
+        .with_context(|| format!("Failed to run {}", install_sh.display()))?;
     if !status.success() {
-        anyhow::bail!("{} exited with status {status}", helper.display());
+        anyhow::bail!("{} exited with status {status}", install_sh.display());
     }
     Ok(())
 }
@@ -115,6 +176,13 @@ fn user_local_update_helper() -> Option<PathBuf> {
     } else {
         None
     }
+}
+
+/// The running user-local app directory, from the launcher's `CODEX_LINUX_APP_DIR`.
+fn user_local_app_dir() -> Option<PathBuf> {
+    std::env::var_os("CODEX_LINUX_APP_DIR")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
 }
 
 /// Packaged apply: fetch fresh wrapper source, rebuild a native package from the

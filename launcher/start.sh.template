@@ -2364,5 +2364,10 @@ echo "Using managed Node.js runtime=${CODEX_MANAGED_NODE_RUNTIME_DIR:-$SCRIPT_DI
 if resolve_update_manager_path >/dev/null 2>&1; then
     export CODEX_UPDATE_MANAGER_PATH
 fi
+# Export the running install's app dir and launcher command so the wrapper
+# updater picks the right install-type path and can relaunch the app after an
+# update.
+export CODEX_LINUX_APP_DIR="$SCRIPT_DIR"
+export CODEX_LINUX_LAUNCHER_CMD="$SCRIPT_DIR/start.sh"
 
 launch_electron "${LAUNCHER_ARGS[@]}"

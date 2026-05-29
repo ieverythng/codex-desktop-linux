@@ -4,18 +4,23 @@
 //! *wrapper* itself (this repository — new Linux features, patches, fixes) has
 //! advanced upstream. Detection is git-only and works for ALL install types
 //! (packaged .deb/.rpm/pacman and user-local install.sh) — it does not require a
-//! local git checkout:
+//! local git checkout of the wrapper:
 //!
-//! - The installed wrapper build time is read from the installed package version
-//!   (`YYYY.MM.DD.HHMMSS+<dmg-sha>`), available on every install. The `+suffix`
-//!   is the upstream DMG sha, NOT a wrapper commit, so it is never used as one.
-//! - The upstream HEAD commit date and `CHANGELOG.md` are obtained with a git
+//! - The installed wrapper identity is the `source.commit` recorded in the
+//!   running app's `<app_dir>/.codex-linux/build-info.json` (app dir from the
+//!   launcher's `CODEX_LINUX_APP_DIR`). This is exact and is what a rebuild
+//!   stamps with the commit it built from, so an applied update aligns cleanly.
+//!   When build-info is unavailable, detection falls back to the package-version
+//!   build timestamp (`YYYY.MM.DD.HHMMSS+<dmg-sha>`; the `+suffix` is the DMG
+//!   sha, never used as a commit).
+//! - The upstream HEAD commit + date + `CHANGELOG.md` are obtained with a git
 //!   shallow fetch (`git fetch --depth 1`) into a cache dir under the updater
 //!   workspace. This never touches the user's working tree and needs only git
 //!   (no GitHub API, no curl).
 //!
-//! A newer wrapper build is available when the upstream HEAD commit date is
-//! later than the installed build timestamp.
+//! An update is available when the installed commit differs from the upstream
+//! HEAD commit (or, on the timestamp fallback, when the upstream commit date is
+//! later than the installed build timestamp).
 
 use anyhow::Result;
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -76,6 +81,27 @@ pub fn parse_build_timestamp(package_version: &str) -> Option<(DateTime<Utc>, St
     let prefix = package_version.split('+').next()?.trim();
     let parsed = NaiveDateTime::parse_from_str(prefix, "%Y.%m.%d.%H%M%S").ok()?;
     Some((parsed.and_utc(), prefix.to_string()))
+}
+
+/// Reads the installed wrapper commit from the running app's build info
+/// (`<app_dir>/.codex-linux/build-info.json`, `source.commit`). This is the
+/// authoritative identity of the wrapper code actually installed, for both
+/// packaged and user-local installs, and is what a rebuild stamps with the
+/// commit it built from. `app_dir` comes from the launcher's
+/// `CODEX_LINUX_APP_DIR`. Returns `None` when unavailable.
+pub fn installed_wrapper_commit_from_app_dir() -> Option<String> {
+    let app_dir = std::env::var_os("CODEX_LINUX_APP_DIR")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())?;
+    let info_path = app_dir.join(".codex-linux").join("build-info.json");
+    let content = std::fs::read_to_string(info_path).ok()?;
+    let parsed = serde_json::from_str::<serde_json::Value>(&content).ok()?;
+    let commit = parsed
+        .get("source")?
+        .get("commit")?
+        .as_str()
+        .filter(|c| !c.is_empty())?;
+    Some(commit.to_string())
 }
 
 /// Resolves the wrapper remote URL: explicit config value, else the checkout's
@@ -174,9 +200,16 @@ pub fn detect_wrapper_update(
     bundle_root: &Path,
     cache_dir: &Path,
 ) -> Result<Option<WrapperUpdate>> {
-    let Some((installed_time, installed_build)) = parse_build_timestamp(installed_version) else {
+    // Authoritative installed identity: the running app's build-info commit.
+    // Falls back to the package-version build timestamp when build-info is
+    // absent (e.g. an older install predating build-info).
+    let installed_commit = installed_wrapper_commit_from_app_dir();
+    let installed_build = parse_build_timestamp(installed_version);
+
+    // Nothing to compare against at all -> can't decide, report no update.
+    if installed_commit.is_none() && installed_build.is_none() {
         return Ok(None);
-    };
+    }
 
     let remote = resolve_remote(config_remote, bundle_root);
     let Some(repo) = shallow_fetch(&remote, branch, cache_dir) else {
@@ -186,16 +219,33 @@ pub fn detect_wrapper_update(
         return Ok(None);
     };
 
+    // Primary decision: commit equality. Same commit installed -> aligned.
+    if let Some(installed) = installed_commit.as_deref() {
+        if installed == candidate_commit {
+            return Ok(None);
+        }
+        // Differs -> an update is available. (Commit identity is exact; no date
+        // comparison needed.)
+        return Ok(Some(WrapperUpdate {
+            installed_build: installed_build.map(|(_, prefix)| prefix),
+            candidate_commit,
+            candidate_date,
+            changelog: build_changelog(changelog_md.as_deref()),
+        }));
+    }
+
+    // Fallback path: no installed commit known, compare build timestamp vs the
+    // upstream commit date.
+    let (installed_time, installed_prefix) = installed_build.expect("checked above");
     let Ok(candidate_time) = DateTime::parse_from_rfc3339(&candidate_date) else {
         return Ok(None);
     };
-
     if candidate_time.with_timezone(&Utc) <= installed_time {
         return Ok(None);
     }
 
     Ok(Some(WrapperUpdate {
-        installed_build: Some(installed_build),
+        installed_build: Some(installed_prefix),
         candidate_commit,
         candidate_date,
         changelog: build_changelog(changelog_md.as_deref()),
@@ -287,6 +337,7 @@ mod tests {
     #[test]
     fn detects_newer_upstream_build() {
         let _g = env_lock();
+        std::env::remove_var("CODEX_LINUX_APP_DIR");
         let origin = tempdir().unwrap();
         let cache = tempdir().unwrap();
         // Upstream commit dated well after the installed build.
@@ -311,6 +362,7 @@ mod tests {
     #[test]
     fn no_update_when_installed_is_newer() {
         let _g = env_lock();
+        std::env::remove_var("CODEX_LINUX_APP_DIR");
         let origin = tempdir().unwrap();
         let cache = tempdir().unwrap();
         // Upstream commit dated BEFORE the installed build.
@@ -331,6 +383,7 @@ mod tests {
     #[test]
     fn unparseable_installed_version_yields_none() {
         let _g = env_lock();
+        std::env::remove_var("CODEX_LINUX_APP_DIR");
         let cache = tempdir().unwrap();
         let result = detect_wrapper_update(
             "not-a-version",
@@ -346,6 +399,7 @@ mod tests {
     #[test]
     fn offline_or_bad_remote_yields_none() {
         let _g = env_lock();
+        std::env::remove_var("CODEX_LINUX_APP_DIR");
         let cache = tempdir().unwrap();
         // A remote that cannot be fetched -> graceful None, no panic.
         let result = detect_wrapper_update(
@@ -357,5 +411,68 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result, None);
+    }
+
+    /// Writes an app build-info.json with the given source commit and points
+    /// CODEX_LINUX_APP_DIR at it.
+    fn set_app_dir_with_commit(dir: &Path, commit: &str) {
+        let cl = dir.join(".codex-linux");
+        std::fs::create_dir_all(&cl).unwrap();
+        std::fs::write(
+            cl.join("build-info.json"),
+            format!("{{\"source\":{{\"commit\":\"{commit}\"}}}}"),
+        )
+        .unwrap();
+        std::env::set_var("CODEX_LINUX_APP_DIR", dir);
+    }
+
+    #[test]
+    fn aligned_when_installed_commit_matches_upstream() {
+        let _g = env_lock();
+        let origin = tempdir().unwrap();
+        let cache = tempdir().unwrap();
+        let app = tempdir().unwrap();
+        init_origin(origin.path(), "2026-06-01T12:00:00 +0000");
+        let remote = origin.path().to_string_lossy().to_string();
+
+        // Read the origin HEAD commit, mark it as the installed wrapper commit.
+        let head = git_capture(&["-C", &remote, "rev-parse", "HEAD"]).unwrap();
+        set_app_dir_with_commit(app.path(), &head);
+
+        let result = detect_wrapper_update(
+            "2026.05.19.214329+x",
+            &remote,
+            "main",
+            origin.path(),
+            cache.path(),
+        )
+        .unwrap();
+        std::env::remove_var("CODEX_LINUX_APP_DIR");
+        assert_eq!(result, None, "matching commit must report no update");
+    }
+
+    #[test]
+    fn update_when_installed_commit_differs() {
+        let _g = env_lock();
+        let origin = tempdir().unwrap();
+        let cache = tempdir().unwrap();
+        let app = tempdir().unwrap();
+        // Installed build is newer by timestamp, but the commit differs, so the
+        // commit-based decision still reports an update (commit identity wins).
+        init_origin(origin.path(), "2026-01-01T00:00:00 +0000");
+        let remote = origin.path().to_string_lossy().to_string();
+        set_app_dir_with_commit(app.path(), "0000000000000000000000000000000000000000");
+
+        let result = detect_wrapper_update(
+            "2099.01.01.000000+x",
+            &remote,
+            "main",
+            origin.path(),
+            cache.path(),
+        )
+        .unwrap();
+        std::env::remove_var("CODEX_LINUX_APP_DIR");
+        let update = result.expect("differing commit must report an update");
+        assert_eq!(update.candidate_commit.len(), 40);
     }
 }
