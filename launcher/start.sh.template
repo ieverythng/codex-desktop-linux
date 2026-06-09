@@ -2317,6 +2317,7 @@ cleanup_launcher() {
 launch_electron() {
     cd "$SCRIPT_DIR"
     log_phase "electron_launch"
+    unset ELECTRON_RUN_AS_NODE
 
     ensure_user_electron_flags_file
     load_feature_electron_args

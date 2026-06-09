@@ -1,0 +1,50 @@
+{
+  "generatedAt": "2026-05-06T16:11:09.898Z",
+  "dmgPath": "/home/juanbeck/codex-desktop-linux/Codex.dmg",
+  "electronVersion": "41.2.0",
+  "appDir": null,
+  "mainBundle": "main-DjuaMcIZ.js",
+  "iconAsset": "app-D0g8sCle.png",
+  "desktopName": "codex-desktop.desktop",
+  "patches": [
+    {
+      "name": "main-process-ui",
+      "status": "applied",
+      "reason": "WARN: Could not find Linux settings state file marker — skipping settings persistence patch"
+    },
+    {
+      "name": "linux-app-updater-bridge",
+      "status": "applied"
+    },
+    {
+      "name": "browser-annotation-screenshot",
+      "status": "applied"
+    },
+    {
+      "name": "opaque-window-default-code-theme",
+      "status": "skipped-optional",
+      "reason": "WARN: Could not find code theme bundle in /tmp/tmp.fb4Tr7tWBB/inspect-app-extracted/webview/assets — skipping translucent sidebar default patch"
+    },
+    {
+      "name": "opaque-window-default-general-settings",
+      "status": "applied"
+    },
+    {
+      "name": "opaque-window-default-webview-index",
+      "status": "applied"
+    },
+    {
+      "name": "opaque-window-default-resolved-theme",
+      "status": "applied"
+    },
+    {
+      "name": "keybinds-settings",
+      "status": "applied"
+    },
+    {
+      "name": "package-desktop-name",
+      "status": "applied"
+    }
+  ],
+  "patchReportPath": "/home/juanbeck/codex-desktop-linux/dist-next/rebuild/patch-report.json"
+}
