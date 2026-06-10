@@ -434,7 +434,7 @@ function findDynamicTraySetup(source) {
   while ((match = setupRegex.exec(source)) != null) {
     const [, setupFn, factoryFn] = match;
     if (isTrayFactoryFunction(source, factoryFn)) {
-      return { setupFn, index: match.index };
+      return { setupFn, factoryFn, index: match.index };
     }
   }
   return null;
@@ -444,6 +444,47 @@ function findDynamicTrayStartupCall(source, setupFn, startIndex) {
   const startupRegex = new RegExp(`([A-Za-z_$][\\w$]*)&&${escapeRegExp(setupFn)}\\(\\);`, "g");
   startupRegex.lastIndex = startIndex;
   return startupRegex.exec(source);
+}
+
+function addDynamicTraySetupFailureLogging(source, traySetup) {
+  const logMessage = "[codex-linux] Failed to set up system tray";
+  if (traySetup == null || source.includes(logMessage)) {
+    return source;
+  }
+
+  const openIndex = source.indexOf("{", traySetup.index);
+  if (openIndex === -1) {
+    return source;
+  }
+  const closeIndex = findMatchingBrace(source, openIndex);
+  if (closeIndex === -1) {
+    return source;
+  }
+
+  const body = source.slice(openIndex, closeIndex + 1);
+  if (!body.includes(`await ${traySetup.factoryFn}(`)) {
+    return source;
+  }
+
+  const catchRegex = /catch\(([A-Za-z_$][\w$]*)\)\{/;
+  const catchMatch = body.match(catchRegex);
+  if (catchMatch == null) {
+    return source;
+  }
+
+  const [, errorVar] = catchMatch;
+  const catchOpenIndex = catchMatch.index + catchMatch[0].length - 1;
+  const catchCloseIndex = findMatchingBrace(body, catchOpenIndex);
+  if (catchCloseIndex === -1) {
+    return source;
+  }
+
+  const catchBody = body.slice(catchOpenIndex + 1, catchCloseIndex);
+  const separator = catchBody.trim().length === 0 || /[;,]$/.test(catchBody.trim()) ? "" : ";";
+  const linuxWarning = `${separator}process.platform===\`linux\`&&console.warn(\`${logMessage}\`,${errorVar})`;
+  const patchedBody =
+    `${body.slice(0, catchCloseIndex)}${linuxWarning}${body.slice(catchCloseIndex)}`;
+  return `${source.slice(0, openIndex)}${patchedBody}${source.slice(closeIndex + 1)}`;
 }
 
 function applyLinuxQuitGuardPatch(currentSource) {
@@ -648,6 +689,8 @@ function applyLinuxExplicitIpcQuitPatch(currentSource) {
 function applyLinuxTrayPatch(currentSource, iconPathExpression) {
   let patchedSource = currentSource;
   const electronVar = requireName(currentSource, "electron") ?? "n";
+  const packagedTrayIconPathExpression = "process.resourcesPath+`/../.codex-linux/codex-desktop-tray.png`";
+  const packagedAppIconPathExpression = "process.resourcesPath+`/../.codex-linux/codex-desktop.png`";
 
   const trayGuardNeedle =
     "process.platform!==`win32`&&process.platform!==`darwin`?null:";
@@ -671,8 +714,11 @@ function applyLinuxTrayPatch(currentSource, iconPathExpression) {
     const trayIconNeedle =
       `for(let e of o){let t=${electronVar}.nativeImage.createFromPath(e);if(!t.isEmpty())return{defaultIcon:t,chronicleRunningIcon:null}}return{defaultIcon:await ${electronVar}.app.getFileIcon(process.execPath,{size:process.platform===\`win32\`?\`small\`:\`normal\`}),chronicleRunningIcon:null}}`;
     const trayIconPatch =
-      `for(let e of o){let t=${electronVar}.nativeImage.createFromPath(e);if(!t.isEmpty())return{defaultIcon:t,chronicleRunningIcon:null}}if(process.platform===\`linux\`){let e=${electronVar}.nativeImage.createFromPath(${iconPathExpression});if(!e.isEmpty())return{defaultIcon:e,chronicleRunningIcon:null}}return{defaultIcon:await ${electronVar}.app.getFileIcon(process.execPath,{size:process.platform===\`win32\`?\`small\`:\`normal\`}),chronicleRunningIcon:null}}`;
-    if (patchedSource.includes(`nativeImage.createFromPath(${iconPathExpression})`)) {
+      `for(let e of o){let t=${electronVar}.nativeImage.createFromPath(e);if(!t.isEmpty())return{defaultIcon:t,chronicleRunningIcon:null}}if(process.platform===\`linux\`){let e=${electronVar}.nativeImage.createFromPath(${packagedTrayIconPathExpression});if(!e.isEmpty())return{defaultIcon:e,chronicleRunningIcon:null};let t=${electronVar}.nativeImage.createFromPath(${packagedAppIconPathExpression});if(!t.isEmpty())return{defaultIcon:t,chronicleRunningIcon:null};let r=${electronVar}.nativeImage.createFromPath(${iconPathExpression});if(!r.isEmpty())return{defaultIcon:r,chronicleRunningIcon:null}}return{defaultIcon:await ${electronVar}.app.getFileIcon(process.execPath,{size:process.platform===\`win32\`?\`small\`:\`normal\`}),chronicleRunningIcon:null}}`;
+    if (
+      patchedSource.includes(`nativeImage.createFromPath(${packagedTrayIconPathExpression})`) ||
+      patchedSource.includes(`nativeImage.createFromPath(${packagedAppIconPathExpression})`)
+    ) {
       // Already patched.
     } else if (patchedSource.includes(trayIconNeedle)) {
       patchedSource = patchedSource.replace(trayIconNeedle, trayIconPatch);
@@ -682,7 +728,7 @@ function applyLinuxTrayPatch(currentSource, iconPathExpression) {
       patchedSource = patchedSource.replace(
         /for\(let ([A-Za-z_$][\w$]*) of ([A-Za-z_$][\w$]*)\)\{let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.nativeImage\.createFromPath\(\1\);if\(!\3\.isEmpty\(\)\)return\{defaultIcon:\3,chronicleRunningIcon:null\}\}return\{defaultIcon:await \4\.app\.getFileIcon\(process\.execPath,\{size:process\.platform===`win32`\?`small`:`normal`\}\),chronicleRunningIcon:null\}\}/,
         (_match, iconPathVar, candidatesVar, imageVar, electronAlias) =>
-          `for(let ${iconPathVar} of ${candidatesVar}){let ${imageVar}=${electronAlias}.nativeImage.createFromPath(${iconPathVar});if(!${imageVar}.isEmpty())return{defaultIcon:${imageVar},chronicleRunningIcon:null}}if(process.platform===\`linux\`){let ${iconPathVar}=${electronAlias}.nativeImage.createFromPath(${iconPathExpression});if(!${iconPathVar}.isEmpty())return{defaultIcon:${iconPathVar},chronicleRunningIcon:null}}return{defaultIcon:await ${electronAlias}.app.getFileIcon(process.execPath,{size:process.platform===\`win32\`?\`small\`:\`normal\`}),chronicleRunningIcon:null}}`,
+          `for(let ${iconPathVar} of ${candidatesVar}){let ${imageVar}=${electronAlias}.nativeImage.createFromPath(${iconPathVar});if(!${imageVar}.isEmpty())return{defaultIcon:${imageVar},chronicleRunningIcon:null}}if(process.platform===\`linux\`){let ${iconPathVar}=${electronAlias}.nativeImage.createFromPath(${packagedTrayIconPathExpression});if(!${iconPathVar}.isEmpty())return{defaultIcon:${iconPathVar},chronicleRunningIcon:null};let ${imageVar}=${electronAlias}.nativeImage.createFromPath(${packagedAppIconPathExpression});if(!${imageVar}.isEmpty())return{defaultIcon:${imageVar},chronicleRunningIcon:null};let __codexLinuxUpstreamTrayIcon=${electronAlias}.nativeImage.createFromPath(${iconPathExpression});if(!__codexLinuxUpstreamTrayIcon.isEmpty())return{defaultIcon:__codexLinuxUpstreamTrayIcon,chronicleRunningIcon:null}}return{defaultIcon:await ${electronAlias}.app.getFileIcon(process.execPath,{size:process.platform===\`win32\`?\`small\`:\`normal\`}),chronicleRunningIcon:null}}`,
       );
     } else {
       console.warn("WARN: Could not find tray icon fallback — skipping Linux tray icon patch");
@@ -835,11 +881,52 @@ function applyLinuxTrayPatch(currentSource, iconPathExpression) {
     }
   }
 
+  const traySetupForDiagnostics = findDynamicTraySetup(patchedSource);
+  const sourceWithTrayDiagnostics = addDynamicTraySetupFailureLogging(
+    patchedSource,
+    traySetupForDiagnostics,
+  );
+  if (
+    traySetupForDiagnostics != null &&
+    sourceWithTrayDiagnostics === patchedSource &&
+    !patchedSource.includes("[codex-linux] Failed to set up system tray")
+  ) {
+    console.warn("WARN: Could not find tray setup catch handler — skipping Linux tray diagnostics patch");
+  }
+  patchedSource = sourceWithTrayDiagnostics;
+
   return patchedSource;
 }
 
 function buildLinuxBuildInfoHelpers(electronVar, fsVar, pathVar) {
-  return `function codexLinuxBuildInfoPaths(){let e=[];try{e.push((0,${pathVar}.join)(process.resourcesPath,\`codex-linux-build-info.json\`)),e.push((0,${pathVar}.join)(process.resourcesPath,\`..\`,\`.codex-linux\`,\`build-info.json\`))}catch{}return e}function codexLinuxReadBuildInfo(){for(let e of codexLinuxBuildInfoPaths())try{if(${fsVar}.existsSync(e)){let t=JSON.parse(${fsVar}.readFileSync(e,\`utf8\`));return t&&typeof t===\`object\`&&!Array.isArray(t)?t:null}}catch{}return null}function codexLinuxBuildInfoValue(e,t=\`unknown\`){return typeof e===\`string\`&&e.trim().length>0?e:Array.isArray(e)&&e.length>0?e.join(\`, \`):e==null?t:String(e)}function codexLinuxBuildInfoCommitUrl(e){let t=e?.source?.commitUrl;return typeof t===\`string\`&&/^https:\\/\\/github\\.com\\/[^/\\s]+\\/[^/\\s]+\\/commit\\/[0-9a-f]{7,40}$/i.test(t)?t:null}function codexLinuxBuildInfoDetail(e){if(!e)return\`No Linux build metadata file was found in this app install.\`;let t=e.linuxTarget??{},n=t.distro??{},r=e.upstreamDmg??{},i=e.source??{},a=e.linuxFeatures?.enabled??[],o=e.packageProfile??{},s=i.shortCommit||i.commit,c=s?i.dirty?\`\${s} (dirty)\`:s:\`unknown\`,l=n.prettyName||[n.id,n.versionId].filter(Boolean).join(\` \`)||\`unknown\`,u=codexLinuxBuildInfoCommitUrl(e);return[\`Linux package profile: \${codexLinuxBuildInfoValue(o.label)}\`,\`Distro: \${l}\`,\`Package manager: \${codexLinuxBuildInfoValue(t.packageManager??o.packageManager)}\`,\`Package format: \${codexLinuxBuildInfoValue(t.packageFormat??o.format)}\`,\`Enabled features: \${a.length>0?a.join(\`, \`):\`none\`}\`,\`Upstream app version: \${codexLinuxBuildInfoValue(r.appVersion)}\`,\`Upstream DMG SHA256: \${codexLinuxBuildInfoValue(r.sha256)}\`,\`Electron: \${codexLinuxBuildInfoValue(e.electronVersion)}\`,\`Linux source revision: \${c}\`,...(u?[\`Source commit URL: \${u}\`]:[]),\`Source branch: \${codexLinuxBuildInfoValue(i.branch)}\`,\`Generated: \${codexLinuxBuildInfoValue(e.generatedAt)}\`].join(\`\\n\`)}async function codexLinuxShowBuildInfo(){try{let e=codexLinuxReadBuildInfo(),t=codexLinuxBuildInfoCommitUrl(e),n=t?[\`Open Commit\`,\`OK\`]:[\`OK\`],r=await ${electronVar}.dialog?.showMessageBox({type:\`info\`,buttons:n,defaultId:t?1:0,cancelId:t?1:0,noLink:!0,message:\`Codex Desktop Linux build information\`,detail:codexLinuxBuildInfoDetail(e)});t&&r?.response===0&&await ${electronVar}.shell?.openExternal(t)}catch{}}`;
+  return `function codexLinuxBuildInfoPaths(){let __codexBuildInfoPaths=[];try{__codexBuildInfoPaths.push((0,${pathVar}.join)(process.resourcesPath,\`codex-linux-build-info.json\`)),__codexBuildInfoPaths.push((0,${pathVar}.join)(process.resourcesPath,\`..\`,\`.codex-linux\`,\`build-info.json\`))}catch{}return __codexBuildInfoPaths}function codexLinuxReadBuildInfo(){for(let __codexBuildInfoPath of codexLinuxBuildInfoPaths())try{if(${fsVar}.existsSync(__codexBuildInfoPath)){let __codexBuildInfo=JSON.parse(${fsVar}.readFileSync(__codexBuildInfoPath,\`utf8\`));if(__codexBuildInfo&&typeof __codexBuildInfo===\`object\`&&!Array.isArray(__codexBuildInfo))return{info:__codexBuildInfo,path:__codexBuildInfoPath}}}catch{}return{info:null,path:null}}function codexLinuxBuildInfoValue(__codexBuildInfoValue,__codexBuildInfoFallback=\`unknown\`){return typeof __codexBuildInfoValue===\`string\`&&__codexBuildInfoValue.trim().length>0?__codexBuildInfoValue:Array.isArray(__codexBuildInfoValue)&&__codexBuildInfoValue.length>0?__codexBuildInfoValue.join(\`, \`):__codexBuildInfoValue==null?__codexBuildInfoFallback:String(__codexBuildInfoValue)}function codexLinuxBuildInfoCommitUrl(__codexBuildInfo){let __codexBuildInfoCommitUrl=__codexBuildInfo?.source?.commitUrl;return typeof __codexBuildInfoCommitUrl===\`string\`&&/^https:\\/\\/github\\.com\\/[^/\\s]+\\/[^/\\s]+\\/commit\\/[0-9a-f]{7,40}$/i.test(__codexBuildInfoCommitUrl)?__codexBuildInfoCommitUrl:null}function codexLinuxGetBuildInfo(){let __codexBuildInfoResult=codexLinuxReadBuildInfo();return{...__codexBuildInfoResult,commitUrl:codexLinuxBuildInfoCommitUrl(__codexBuildInfoResult.info)}}function codexLinuxBuildInfoDetail(__codexBuildInfo,__codexBuildInfoPath){if(!__codexBuildInfo)return\`No Linux build metadata file was found in this app install.\`;let __codexBuildInfoTarget=__codexBuildInfo.linuxTarget??{},__codexBuildInfoDistro=__codexBuildInfoTarget.distro??{},__codexBuildInfoDmg=__codexBuildInfo.upstreamDmg??{},__codexBuildInfoSource=__codexBuildInfo.source??{},__codexBuildInfoFeatures=__codexBuildInfo.linuxFeatures?.enabled??[],__codexBuildInfoProfile=__codexBuildInfo.packageProfile??{},__codexBuildInfoCommit=__codexBuildInfoSource.commit||__codexBuildInfoSource.shortCommit,__codexBuildInfoCommitValue=__codexBuildInfoCommit?__codexBuildInfoSource.dirty?\`\${__codexBuildInfoCommit} (dirty)\`:__codexBuildInfoCommit:\`unknown\`,__codexBuildInfoDistroValue=__codexBuildInfoDistro.prettyName||[__codexBuildInfoDistro.id,__codexBuildInfoDistro.versionId].filter(Boolean).join(\` \`)||\`unknown\`,__codexBuildInfoCommitLink=codexLinuxBuildInfoCommitUrl(__codexBuildInfo);return[\`Metadata file: \${codexLinuxBuildInfoValue(__codexBuildInfoPath)}\`,\`Linux package profile: \${codexLinuxBuildInfoValue(__codexBuildInfoProfile.label)}\`,\`Distro: \${__codexBuildInfoDistroValue}\`,\`Package manager: \${codexLinuxBuildInfoValue(__codexBuildInfoTarget.packageManager??__codexBuildInfoProfile.packageManager)}\`,\`Package format: \${codexLinuxBuildInfoValue(__codexBuildInfoTarget.packageFormat??__codexBuildInfoProfile.format)}\`,\`Enabled features: \${__codexBuildInfoFeatures.length>0?__codexBuildInfoFeatures.join(\`, \`):\`none\`}\`,\`Upstream app version: \${codexLinuxBuildInfoValue(__codexBuildInfoDmg.appVersion)}\`,\`Upstream DMG SHA256: \${codexLinuxBuildInfoValue(__codexBuildInfoDmg.sha256)}\`,\`Electron: \${codexLinuxBuildInfoValue(__codexBuildInfo.electronVersion)}\`,\`Linux source commit: \${__codexBuildInfoCommitValue}\`,...(__codexBuildInfoCommitLink?[\`Source commit URL: \${__codexBuildInfoCommitLink}\`]:[]),\`Source branch: \${codexLinuxBuildInfoValue(__codexBuildInfoSource.branch)}\`,\`Generated: \${codexLinuxBuildInfoValue(__codexBuildInfo.generatedAt)}\`].join(\`\\n\`)}async function codexLinuxOpenBuildInfoCommit(){let __codexBuildInfoResult=codexLinuxGetBuildInfo();return __codexBuildInfoResult.commitUrl?(await ${electronVar}.shell?.openExternal(__codexBuildInfoResult.commitUrl),{success:!0}):{success:!1}}async function codexLinuxShowBuildInfo(){try{let __codexBuildInfoResult=codexLinuxGetBuildInfo(),__codexBuildInfoCommitUrl=__codexBuildInfoResult.commitUrl,__codexBuildInfoPath=__codexBuildInfoResult.path,__codexBuildInfoButtons=[],__codexBuildInfoButtonIndex=0;__codexBuildInfoCommitUrl&&__codexBuildInfoButtons.push(\`Open Source Commit\`),__codexBuildInfoPath&&__codexBuildInfoButtons.push(\`Open Metadata File\`),__codexBuildInfoButtons.push(\`OK\`);let __codexBuildInfoBoxResponse=await ${electronVar}.dialog?.showMessageBox({type:\`info\`,buttons:__codexBuildInfoButtons,defaultId:__codexBuildInfoButtons.length-1,cancelId:__codexBuildInfoButtons.length-1,message:\`Codex Desktop Linux build information\`,detail:codexLinuxBuildInfoDetail(__codexBuildInfoResult.info,__codexBuildInfoPath)});if(__codexBuildInfoCommitUrl&&__codexBuildInfoBoxResponse?.response===__codexBuildInfoButtonIndex++){await ${electronVar}.shell?.openExternal(__codexBuildInfoCommitUrl);return}if(__codexBuildInfoPath&&__codexBuildInfoBoxResponse?.response===__codexBuildInfoButtonIndex++)await ${electronVar}.shell?.openPath?.(__codexBuildInfoPath)}catch{}}`;
+}
+
+function addLinuxBuildInfoRequestHandler(currentSource) {
+  const handler = "\"codex-linux-get-build-info\":async()=>codexLinuxGetBuildInfo(),\"codex-linux-open-build-info-commit\":async()=>codexLinuxOpenBuildInfoCommit(),\"codex-linux-show-build-info\":async()=>{await codexLinuxShowBuildInfo();return{success:!0}},";
+  const nestedHandler = `({${handler}`;
+  let patchedSource = currentSource;
+  let changed = false;
+  if (patchedSource.includes(nestedHandler)) {
+    patchedSource = patchedSource.replace(nestedHandler, "({");
+    changed = true;
+  } else if (patchedSource.includes(handler)) {
+    return { source: patchedSource, changed: false };
+  }
+
+  const handlerKeyIndexes = [
+    patchedSource.indexOf("\"set-global-state\":async"),
+    patchedSource.indexOf("\"get-global-state\":async"),
+  ].filter((index) => index !== -1);
+  if (handlerKeyIndexes.length === 0) {
+    return { source: patchedSource, changed };
+  }
+
+  const keyIndex = Math.min(...handlerKeyIndexes);
+  return {
+    source: `${patchedSource.slice(0, keyIndex)}${handler}${patchedSource.slice(keyIndex)}`,
+    changed: true,
+  };
 }
 
 function findLinuxBuildInfoHelperInsertionIndex(source, classMatch, helpMenuMatch) {
@@ -867,6 +954,21 @@ function applyLinuxBuildInfoTrayPatch(currentSource) {
 
   let patchedSource = currentSource;
   let changed = false;
+  if (
+    electronVar != null &&
+    patchedSource.includes(`let ${electronVar}=await ${electronVar}.dialog?.showMessageBox`)
+  ) {
+    patchedSource = patchedSource
+      .replace(
+        `let ${electronVar}=await ${electronVar}.dialog?.showMessageBox`,
+        `let __codexBuildInfoBoxResponse=await ${electronVar}.dialog?.showMessageBox`,
+      )
+      .replaceAll(
+        `&&${electronVar}?.response===`,
+        "&&__codexBuildInfoBoxResponse?.response===",
+      );
+    changed = true;
+  }
   const trayMenuRegex = /getNativeTrayMenuItems\(\)\{[^]*?return\[/g;
   const classRegex = /var [A-Za-z_$][\w$]*=class\{[^]*?getNativeTrayMenuItems\(\)\{[^]*?return\[/;
   const helpMenuPattern = /\{role:`help`,id:[A-Za-z_$][\w$]*\.bn\.help,submenu:\[/;
@@ -908,6 +1010,10 @@ function applyLinuxBuildInfoTrayPatch(currentSource) {
       console.warn("WARN: Could not find Help menu insertion point — skipping Linux build info app menu patch");
     }
   }
+
+  const handlerPatch = addLinuxBuildInfoRequestHandler(patchedSource);
+  patchedSource = handlerPatch.source;
+  changed = changed || handlerPatch.changed;
 
   if (!changed || hasHelper) {
     return patchedSource;
